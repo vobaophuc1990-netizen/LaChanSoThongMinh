@@ -1,8 +1,4 @@
 import streamlit as st
-import urllib.request
-import urllib.error
-import json
-import time
 import random
 import re
 
@@ -17,29 +13,12 @@ st.set_page_config(
     layout="wide"
 )
 
-MODEL = "gemini-3.8-flash"
-
-COOLDOWN_SECONDS = 5
-
 MAX_ANALYSIS_CHARS = 12000
-
-GEMINI_TIMEOUT = 45
-
-GEMINI_MAX_ATTEMPTS = 3
-
-
-try:
-    API_KEY = st.secrets["GEMINI_API_KEY"]
-except Exception:
-    API_KEY = ""
 
 
 # =========================================================
 # 2. SESSION STATE
 # =========================================================
-
-if "last_api_call" not in st.session_state:
-    st.session_state.last_api_call = 0.0
 
 if "game_question" not in st.session_state:
     st.session_state.game_question = None
@@ -147,701 +126,7 @@ st.markdown(
 
 
 # =========================================================
-# 5. COOLDOWN API
-# =========================================================
-
-def can_call_api():
-
-    now = time.time()
-
-    elapsed = (
-        now
-        - st.session_state.last_api_call
-    )
-
-    if elapsed < COOLDOWN_SECONDS:
-
-        remaining = int(
-            COOLDOWN_SECONDS
-            - elapsed
-            + 0.99
-        )
-
-        return False, remaining
-
-    return True, 0
-
-
-# =========================================================
-# 6. JSON EXTRACTOR
-# =========================================================
-
-def extract_json(text):
-    """
-    Gemini có thể trả JSON:
-        {...}
-
-    hoặc:
-        ```json
-        {...}
-        ```
-
-    hoặc có văn bản trước/sau JSON.
-
-    Hàm này cố gắng lấy JSON thực tế.
-    """
-
-    if not text:
-        return None
-
-    text = text.strip()
-
-    # -----------------------------------------------------
-    # Cách 1: JSON nguyên bản
-    # -----------------------------------------------------
-
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-
-    # -----------------------------------------------------
-    # Cách 2: Code fence
-    # -----------------------------------------------------
-
-    cleaned = re.sub(
-        r"^```(?:json)?\s*",
-        "",
-        text,
-        flags=re.IGNORECASE
-    )
-
-    cleaned = re.sub(
-        r"\s*```$",
-        "",
-        cleaned
-    )
-
-    cleaned = cleaned.strip()
-
-    try:
-        return json.loads(cleaned)
-    except Exception:
-        pass
-
-    # -----------------------------------------------------
-    # Cách 3: tìm JSON object
-    # -----------------------------------------------------
-
-    first = cleaned.find("{")
-
-    if first != -1:
-
-        depth = 0
-        in_string = False
-        escape = False
-
-        for index in range(
-            first,
-            len(cleaned)
-        ):
-
-            char = cleaned[index]
-
-            if in_string:
-
-                if escape:
-
-                    escape = False
-
-                elif char == "\\":
-
-                    escape = True
-
-                elif char == '"':
-
-                    in_string = False
-
-                continue
-
-            if char == '"':
-
-                in_string = True
-
-            elif char == "{":
-
-                depth += 1
-
-            elif char == "}":
-
-                depth -= 1
-
-                if depth == 0:
-
-                    candidate = cleaned[
-                        first:index + 1
-                    ]
-
-                    try:
-                        return json.loads(
-                            candidate
-                        )
-                    except Exception:
-                        break
-
-    # -----------------------------------------------------
-    # Cách 4: JSON array
-    # -----------------------------------------------------
-
-    first = cleaned.find("[")
-
-    if first != -1:
-
-        depth = 0
-        in_string = False
-        escape = False
-
-        for index in range(
-            first,
-            len(cleaned)
-        ):
-
-            char = cleaned[index]
-
-            if in_string:
-
-                if escape:
-
-                    escape = False
-
-                elif char == "\\":
-
-                    escape = True
-
-                elif char == '"':
-
-                    in_string = False
-
-                continue
-
-            if char == '"':
-
-                in_string = True
-
-            elif char == "[":
-
-                depth += 1
-
-            elif char == "]":
-
-                depth -= 1
-
-                if depth == 0:
-
-                    candidate = cleaned[
-                        first:index + 1
-                    ]
-
-                    try:
-                        return json.loads(
-                            candidate
-                        )
-                    except Exception:
-                        break
-
-    return None
-
-
-# =========================================================
-# 7. GEMINI API
-# =========================================================
-
-def call_gemini(
-    prompt,
-    system_instruction,
-    json_mode=True,
-    max_attempts=GEMINI_MAX_ATTEMPTS
-):
-
-    if not API_KEY:
-
-        return {
-            "success": False,
-            "error": (
-                "Chưa cấu hình GEMINI_API_KEY."
-            ),
-            "error_code": "NO_API_KEY"
-        }
-
-
-    allowed, remaining = can_call_api()
-
-    if not allowed:
-
-        return {
-            "success": False,
-            "error": (
-                f"⏳ Vui lòng chờ {remaining} giây "
-                "trước khi gửi yêu cầu tiếp theo."
-            ),
-            "error_code": "COOLDOWN"
-        }
-
-
-    st.session_state.last_api_call = time.time()
-
-
-    url = (
-        "https://generativelanguage.googleapis.com/"
-        f"v1beta/models/{MODEL}:generateContent"
-        f"?key={API_KEY}"
-    )
-
-
-    generation_config = {
-        "temperature": 0.2,
-        "maxOutputTokens": 1200
-    }
-
-
-    if json_mode:
-
-        generation_config[
-            "responseMimeType"
-        ] = "application/json"
-
-
-    data = {
-
-        "systemInstruction": {
-            "parts": [
-                {
-                    "text": system_instruction
-                }
-            ]
-        },
-
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {
-                        "text": prompt
-                    }
-                ]
-            }
-        ],
-
-        "generationConfig": generation_config
-    }
-
-
-    payload = json.dumps(
-        data,
-        ensure_ascii=False
-    ).encode("utf-8")
-
-
-    last_error_code = None
-
-
-    for attempt in range(
-        max_attempts
-    ):
-
-        try:
-
-            req = urllib.request.Request(
-                url,
-                data=payload,
-                headers={
-                    "Content-Type":
-                        "application/json; charset=utf-8"
-                },
-                method="POST"
-            )
-
-
-            with urllib.request.urlopen(
-                req,
-                timeout=GEMINI_TIMEOUT
-            ) as response:
-
-                raw_response = (
-                    response
-                    .read()
-                    .decode(
-                        "utf-8",
-                        errors="ignore"
-                    )
-                )
-
-
-            result = json.loads(
-                raw_response
-            )
-
-
-            candidates = result.get(
-                "candidates",
-                []
-            )
-
-
-            if not candidates:
-
-                return {
-                    "success": False,
-                    "error": (
-                        "Gemini không trả về candidate."
-                    ),
-                    "error_code":
-                        "EMPTY_RESPONSE"
-                }
-
-
-            candidate = candidates[0]
-
-
-            finish_reason = candidate.get(
-                "finishReason",
-                ""
-            )
-
-
-            if finish_reason in [
-                "SAFETY",
-                "BLOCKLIST",
-                "PROHIBITED_CONTENT",
-                "SPII"
-            ]:
-
-                return {
-                    "success": False,
-                    "error": (
-                        "Gemini đã chặn phản hồi "
-                        "vì chính sách an toàn nội dung."
-                    ),
-                    "error_code": "SAFETY"
-                }
-
-
-            content = candidate.get(
-                "content",
-                {}
-            )
-
-
-            parts = content.get(
-                "parts",
-                []
-            )
-
-
-            response_text = ""
-
-
-            for part in parts:
-
-                if isinstance(
-                    part,
-                    dict
-                ):
-
-                    part_text = part.get(
-                        "text",
-                        ""
-                    )
-
-                    if part_text:
-
-                        response_text += (
-                            part_text
-                        )
-
-
-            response_text = (
-                response_text.strip()
-            )
-
-
-            if not response_text:
-
-                return {
-                    "success": False,
-                    "error": (
-                        "Gemini trả về nội dung rỗng."
-                    ),
-                    "error_code":
-                        "EMPTY_TEXT"
-                }
-
-
-            return {
-                "success": True,
-                "text": response_text
-            }
-
-
-        # =================================================
-        # HTTP ERROR
-        # =================================================
-
-        except urllib.error.HTTPError as e:
-
-            last_error_code = e.code
-
-
-            # -------------------------------------------------
-            # 503
-            # -------------------------------------------------
-
-            if e.code == 503:
-
-                if attempt < max_attempts - 1:
-
-                    base_delay = (
-                        2 ** attempt
-                    )
-
-                    jitter = random.uniform(
-                        0.5,
-                        1.5
-                    )
-
-                    wait_time = min(
-                        base_delay + jitter,
-                        8
-                    )
-
-                    with st.spinner(
-                        "⏳ Gemini đang bận, "
-                        f"thử lại sau "
-                        f"{wait_time:.1f} giây..."
-                    ):
-
-                        time.sleep(
-                            wait_time
-                        )
-
-                    continue
-
-
-                return {
-                    "success": False,
-                    "error": (
-                        "⚠️ Gemini đang quá tải."
-                    ),
-                    "error_code": 503
-                }
-
-
-            # -------------------------------------------------
-            # 429
-            # -------------------------------------------------
-
-            if e.code == 429:
-
-                return {
-                    "success": False,
-                    "error": (
-                        "⚠️ Gemini đang giới hạn API "
-                        "(HTTP 429)."
-                    ),
-                    "error_code": 429
-                }
-
-
-            # -------------------------------------------------
-            # 400
-            # -------------------------------------------------
-
-            if e.code == 400:
-
-                try:
-
-                    error_body = (
-                        e.read()
-                        .decode(
-                            "utf-8",
-                            errors="ignore"
-                        )
-                    )
-
-                except Exception:
-
-                    error_body = ""
-
-
-                return {
-                    "success": False,
-                    "error": (
-                        "❌ Yêu cầu gửi tới Gemini "
-                        "không hợp lệ (HTTP 400).\n\n"
-                        f"{error_body[:500]}"
-                    ),
-                    "error_code": 400
-                }
-
-
-            # -------------------------------------------------
-            # 401 / 403
-            # -------------------------------------------------
-
-            if e.code in [
-                401,
-                403
-            ]:
-
-                return {
-                    "success": False,
-                    "error": (
-                        f"🔑 API key hoặc quyền truy cập "
-                        f"có vấn đề (HTTP {e.code})."
-                    ),
-                    "error_code": e.code
-                }
-
-
-            # -------------------------------------------------
-            # 500 / 502 / 504
-            # -------------------------------------------------
-
-            if e.code in [
-                500,
-                502,
-                504
-            ]:
-
-                if attempt < max_attempts - 1:
-
-                    wait_time = min(
-                        2 ** attempt + 1,
-                        6
-                    )
-
-                    time.sleep(
-                        wait_time
-                    )
-
-                    continue
-
-
-                return {
-                    "success": False,
-                    "error": (
-                        f"⚠️ Gemini gặp lỗi "
-                        f"HTTP {e.code}."
-                    ),
-                    "error_code": e.code
-                }
-
-
-            return {
-                "success": False,
-                "error": (
-                    f"❌ Gemini API lỗi HTTP {e.code}."
-                ),
-                "error_code": e.code
-            }
-
-
-        # =================================================
-        # NETWORK
-        # =================================================
-
-        except urllib.error.URLError:
-
-            last_error_code = "NETWORK"
-
-
-            if attempt < max_attempts - 1:
-
-                time.sleep(
-                    2 ** attempt
-                )
-
-                continue
-
-
-            return {
-                "success": False,
-                "error": (
-                    "🌐 Không kết nối được tới Gemini."
-                ),
-                "error_code": "NETWORK"
-            }
-
-
-        # =================================================
-        # TIMEOUT
-        # =================================================
-
-        except TimeoutError:
-
-            last_error_code = "TIMEOUT"
-
-
-            if attempt < max_attempts - 1:
-
-                time.sleep(2)
-
-                continue
-
-
-            return {
-                "success": False,
-                "error": (
-                    "⏱️ Gemini phản hồi quá lâu."
-                ),
-                "error_code": "TIMEOUT"
-            }
-
-
-        # =================================================
-        # JSON ERROR
-        # =================================================
-
-        except json.JSONDecodeError:
-
-            return {
-                "success": False,
-                "error": (
-                    "❌ Gemini trả về dữ liệu "
-                    "không hợp lệ."
-                ),
-                "error_code":
-                    "INVALID_RESPONSE"
-            }
-
-
-        # =================================================
-        # OTHER
-        # =================================================
-
-        except Exception as e:
-
-            return {
-                "success": False,
-                "error": (
-                    f"❌ Lỗi hệ thống: {str(e)}"
-                ),
-                "error_code":
-                    "UNKNOWN"
-            }
-
-
-    return {
-        "success": False,
-        "error": (
-            "⚠️ Không thể nhận phản hồi Gemini."
-        ),
-        "error_code": last_error_code
-    }
-
-
-# =========================================================
-# 8. BỘ TỪ KHÓA RỦI RO
+# 5. BỘ TỪ KHÓA RỦI RO
 # =========================================================
 
 PASSWORD_KEYWORDS = [
@@ -1111,7 +396,7 @@ ACTION_KEYWORDS = [
 
 
 # =========================================================
-# 9. TÌM TỪ KHÓA
+# 6. TÌM TỪ KHÓA
 # =========================================================
 
 def normalize_for_matching(text):
@@ -1163,7 +448,7 @@ def find_keywords(
 
 
 # =========================================================
-# 10. NHẬN DIỆN SỐ TIỀN
+# 7. NHẬN DIỆN SỐ TIỀN
 # =========================================================
 
 def detect_money_amount(text):
@@ -1223,14 +508,11 @@ def detect_money_amount(text):
 
 
 # =========================================================
-# 11. TÍNH RISK SCORE
+# 8. TÍNH RISK SCORE
 # =========================================================
 #
-# QUAN TRỌNG:
-#
-# GEMINI KHÔNG QUYẾT ĐỊNH risk_score.
-#
-# Điểm cuối cùng luôn được tính ở đây.
+# Điểm cuối cùng luôn được tính bởi rule engine.
+# Không sử dụng AI/Gemini.
 # =========================================================
 
 def calculate_risk_score(text):
@@ -2033,7 +1315,7 @@ def calculate_risk_score(text):
 
 
 # =========================================================
-# 12. FALLBACK PHÂN TÍCH
+# 9. FALLBACK PHÂN TÍCH
 # =========================================================
 
 def fallback_analysis(message):
@@ -2271,289 +1553,30 @@ def fallback_analysis(message):
 
 
 # =========================================================
-# 13. SYSTEM PROMPT
+# 10. PHÂN TÍCH LOCAL
 # =========================================================
-
-ANALYSIS_SYSTEM = """
-Bạn là chuyên gia giáo dục an toàn số cho học sinh THPT.
-
-Nhiệm vụ:
-
-Phân tích một tin nhắn và nhận diện các dấu hiệu:
-- thao túng tâm lý
-- lừa đảo
-- tạo áp lực
-- giả danh
-- yêu cầu thông tin nhạy cảm
-- yêu cầu tiền
-- yêu cầu OTP/mật khẩu
-- liên kết đáng ngờ
-
-QUAN TRỌNG:
-
-Điểm risk_score KHÔNG do bạn quyết định.
-
-Ứng dụng sẽ tự tính điểm bằng một bộ luật riêng.
-
-Bạn chỉ cung cấp:
-- giải thích
-- chiến thuật
-- bằng chứng
-- cơ chế tâm lý
-- khuyến nghị
-
-Không được tự bịa bằng chứng.
-
-Không được khẳng định người gửi chắc chắn là tội phạm
-nếu chỉ dựa trên một tin nhắn.
-
-Trả về JSON đúng cấu trúc:
-
-{
-    "risk_score": 0,
-    "risk_level": "",
-    "main_strategy": "",
-    "detected_strategies": [],
-    "manipulation_signals": [],
-    "evidence": [],
-    "psychological_mechanism": "",
-    "recommended_actions": [],
-    "reasoning": ""
-}
-
-Không Markdown.
-Không ```json.
-Không thêm văn bản bên ngoài JSON.
-"""
-
-
-# =========================================================
-# 14. PHÂN TÍCH BẰNG GEMINI + RULE ENGINE
+#
+# Không sử dụng Gemini.
+#
+# Kết quả được tạo hoàn toàn từ bộ từ khóa
+# và rule engine của Lá Chắn Số.
 # =========================================================
 
 def analyze_message(message):
 
-    # -----------------------------------------------------
-    # RULE ENGINE TÍNH ĐIỂM TRƯỚC
-    # -----------------------------------------------------
-
-    rule_result = calculate_risk_score(
+    result = fallback_analysis(
         message
     )
 
-    rule_score = rule_result[
-        "risk_score"
-    ]
-
-    rule_level = rule_result[
-        "risk_level"
-    ]
-
-
-    # -----------------------------------------------------
-    # NẾU KHÔNG CÓ API KEY
-    # -----------------------------------------------------
-
-    if not API_KEY:
-
-        return (
-            fallback_analysis(
-                message
-            ),
-            "fallback"
-        )
-
-
-    prompt = f"""
-Hãy phân tích tin nhắn dưới đây.
-
-Tin nhắn:
-
---- BẮT ĐẦU ---
-{message}
---- KẾT THÚC ---
-
-Lưu ý:
-Điểm rủi ro của hệ thống sẽ được tính riêng.
-Bạn chỉ cần cung cấp phần giải thích và nhận diện thủ đoạn.
-
-Trả về JSON.
-"""
-
-
-    response = call_gemini(
-        prompt,
-        ANALYSIS_SYSTEM,
-        json_mode=True
-    )
-
-
-    # -----------------------------------------------------
-    # GEMINI THÀNH CÔNG
-    # -----------------------------------------------------
-
-    if response[
-        "success"
-    ]:
-
-        gemini_result = extract_json(
-            response["text"]
-        )
-
-
-        if isinstance(
-            gemini_result,
-            dict
-        ):
-
-            # =============================================
-            # CỰC KỲ QUAN TRỌNG
-            #
-            # BỎ QUA risk_score GEMINI TRẢ VỀ.
-            #
-            # LẤY ĐIỂM TỪ RULE ENGINE.
-            # =============================================
-
-            final_result = {
-
-                "risk_score":
-                    rule_score,
-
-                "risk_level":
-                    rule_level,
-
-                "main_strategy":
-                    gemini_result.get(
-                        "main_strategy",
-                        "Không xác định"
-                    ),
-
-                "detected_strategies":
-                    gemini_result.get(
-                        "detected_strategies",
-                        []
-                    ),
-
-                "manipulation_signals":
-                    gemini_result.get(
-                        "manipulation_signals",
-                        rule_result["signals"]
-                    ),
-
-                "evidence":
-                    gemini_result.get(
-                        "evidence",
-                        []
-                    ),
-
-                "psychological_mechanism":
-                    gemini_result.get(
-                        "psychological_mechanism",
-                        ""
-                    ),
-
-                "recommended_actions":
-                    gemini_result.get(
-                        "recommended_actions",
-                        []
-                    ),
-
-                "reasoning":
-                    gemini_result.get(
-                        "reasoning",
-                        ""
-                    )
-            }
-
-
-            # -------------------------------------------------
-            # Nếu Gemini không trả một số phần,
-            # lấy fallback tương ứng.
-            # -------------------------------------------------
-
-            fallback = fallback_analysis(
-                message
-            )
-
-
-            if not final_result[
-                "manipulation_signals"
-            ]:
-
-                final_result[
-                    "manipulation_signals"
-                ] = fallback[
-                    "manipulation_signals"
-                ]
-
-
-            if not final_result[
-                "evidence"
-            ]:
-
-                final_result[
-                    "evidence"
-                ] = fallback[
-                    "evidence"
-                ]
-
-
-            if not final_result[
-                "recommended_actions"
-            ]:
-
-                final_result[
-                    "recommended_actions"
-                ] = fallback[
-                    "recommended_actions"
-                ]
-
-
-            if not final_result[
-                "psychological_mechanism"
-            ]:
-
-                final_result[
-                    "psychological_mechanism"
-                ] = fallback[
-                    "psychological_mechanism"
-                ]
-
-
-            if not final_result[
-                "reasoning"
-            ]:
-
-                final_result[
-                    "reasoning"
-                ] = fallback[
-                    "reasoning"
-                ]
-
-
-            return (
-                final_result,
-                "gemini"
-            )
-
-
-    # -----------------------------------------------------
-    # GEMINI LỖI
-    # -----------------------------------------------------
-
     return (
-        fallback_analysis(
-            message
-        ),
-        "fallback"
+        result,
+        "local"
     )
 
 
 # =========================================================
-# 15. NGÂN HÀNG 30 TÌNH HUỐNG
+# 11. NGÂN HÀNG 30 TÌNH HUỐNG
 # =========================================================
-#
-# GEMINI KHÔNG TẠO GAME.
 #
 # Mỗi tình huống có ID riêng.
 #
@@ -3199,7 +2222,7 @@ FALLBACK_SCENARIOS = [
 
 
 # =========================================================
-# 16. LẤY TÌNH HUỐNG KHÔNG LẶP
+# 12. LẤY TÌNH HUỐNG KHÔNG LẶP
 # =========================================================
 
 def get_next_scenario():
@@ -3299,7 +2322,7 @@ def get_next_scenario():
 
 
 # =========================================================
-# 17. HIỂN THỊ RISK SCORE
+# 13. HIỂN THỊ RISK SCORE
 # =========================================================
 
 def display_risk_score(
@@ -3347,7 +2370,7 @@ def display_risk_score(
 
 
 # =========================================================
-# 18. TAB
+# 14. TAB
 # =========================================================
 
 tab1, tab2, tab3 = st.tabs([
@@ -3454,27 +2477,14 @@ with tab1:
             # NGUỒN
             # =================================================
 
-            if source == "gemini":
+            st.success(
+                "🛡️ Đã phân tích bằng bộ quy tắc của Lá Chắn Số."
+            )
 
-                st.success(
-                    "🤖 Gemini đã hỗ trợ phân tích nội dung."
-                )
-
-                st.caption(
-                    "🔐 Điểm rủi ro được tính bởi bộ luật "
-                    "của Lá Chắn Số, không lấy điểm Gemini trả về."
-                )
-
-            else:
-
-                st.warning(
-                    "🛡️ Gemini đang bận. "
-                    "Đã kích hoạt bộ phân tích dự phòng."
-                )
-
-                st.caption(
-                    "Điểm rủi ro được tính toán dựa trên bộ quy tắc của ứng dụng."
-                )
+            st.caption(
+                "Điểm rủi ro được tính toán hoàn toàn dựa trên "
+                "các từ khóa và quy tắc được tích hợp trong ứng dụng."
+            )
 
 
             st.divider()
@@ -3812,12 +2822,6 @@ with tab2:
         "🎲 TẠO TÌNH HUỐNG",
         use_container_width=True
     ):
-
-        # =================================================
-        # KHÔNG GỌI GEMINI.
-        #
-        # Đây là điểm thay đổi quan trọng nhất.
-        # =================================================
 
         get_next_scenario()
 
@@ -4177,7 +3181,7 @@ with tab3:
 
 
 # =========================================================
-# 19. FOOTER
+# 15. FOOTER
 # =========================================================
 
 st.divider()
@@ -4193,4 +3197,3 @@ st.caption(
     f"{st.session_state.analysis_count} lượt phân tích "
     f"trong phiên này."
 )
-
