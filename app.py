@@ -1,4 +1,4 @@
-code = r'''import streamlit as st
+import streamlit as st
 import urllib.request
 import urllib.error
 import json
@@ -17,139 +17,110 @@ st.set_page_config(
     layout="wide"
 )
 
-# Gemini 3.8 Flash
 MODEL = "gemini-3.8-flash"
 
-# Model dự phòng nếu model chính gặp lỗi tạm thời
-FALLBACK_MODEL = "gemini-2.5-flash"
-
-# Không gọi API liên tục
 COOLDOWN_SECONDS = 5
 
-# Giới hạn nội dung gửi lên Gemini
 MAX_ANALYSIS_CHARS = 12000
 
-# Timeout
-GEMINI_TIMEOUT = 25
+GEMINI_TIMEOUT = 45
 
-# Số lần retry cho lỗi tạm thời
 GEMINI_MAX_ATTEMPTS = 3
 
 
-# =========================================================
-# 2. LẤY API KEY
-# =========================================================
-
 try:
-    API_KEY = st.secrets.get("GEMINI_API_KEY", "").strip()
+    API_KEY = st.secrets["GEMINI_API_KEY"]
 except Exception:
     API_KEY = ""
 
 
 # =========================================================
-# 3. SESSION STATE
+# 2. SESSION STATE
 # =========================================================
 
-DEFAULT_STATE = {
-    "last_api_call": 0.0,
-    "analysis_count": 0,
+if "last_api_call" not in st.session_state:
+    st.session_state.last_api_call = 0.0
 
-    "game_question": None,
-    "game_result": None,
+if "game_question" not in st.session_state:
+    st.session_state.game_question = None
 
-    "used_scenarios": [],
-    "game_round": 0,
+if "game_result" not in st.session_state:
+    st.session_state.game_result = None
 
-    "last_gemini_status": None,
-    "last_gemini_error": None,
-}
+if "game_answer" not in st.session_state:
+    st.session_state.game_answer = None
 
-for key, value in DEFAULT_STATE.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
+if "used_scenario_ids" not in st.session_state:
+    st.session_state.used_scenario_ids = []
+
+if "game_round" not in st.session_state:
+    st.session_state.game_round = 0
+
+if "analysis_count" not in st.session_state:
+    st.session_state.analysis_count = 0
 
 
 # =========================================================
-# 4. CSS
+# 3. CSS
 # =========================================================
 
 st.markdown(
     """
     <style>
 
-    .main {
-        padding-top: 1rem;
+    textarea, input {
+        font-family: "Segoe UI", "Arial", sans-serif !important;
+        ime-mode: auto !important;
     }
 
-    .hero {
-        padding: 1.5rem 1.5rem 1.2rem 1.5rem;
-        border-radius: 20px;
-        background: linear-gradient(
-            135deg,
-            rgba(30, 64, 175, 0.12),
-            rgba(16, 185, 129, 0.10)
-        );
-        border: 1px solid rgba(100, 116, 139, 0.18);
-        margin-bottom: 1.2rem;
-    }
-
-    .hero-title {
-        font-size: 2.4rem;
+    .main-title {
+        font-size: 42px;
         font-weight: 800;
-        margin-bottom: 0.3rem;
+        text-align: center;
+        margin-bottom: 5px;
     }
 
-    .hero-subtitle {
-        font-size: 1.05rem;
-        color: #64748b;
-    }
-
-    .risk-card {
-        padding: 1.2rem;
-        border-radius: 18px;
-        border: 1px solid rgba(100, 116, 139, 0.2);
-        background: rgba(248, 250, 252, 0.75);
-        margin-top: 1rem;
-    }
-
-    .small-muted {
-        color: #64748b;
-        font-size: 0.9rem;
-    }
-
-    .status-box {
-        padding: 0.9rem 1rem;
-        border-radius: 14px;
-        border: 1px solid rgba(100, 116, 139, 0.2);
-        margin-top: 0.8rem;
+    .subtitle {
+        text-align: center;
+        color: #777;
+        font-size: 18px;
+        margin-bottom: 30px;
     }
 
     .danger-box {
-        padding: 1rem;
-        border-radius: 14px;
-        background: rgba(239, 68, 68, 0.08);
-        border: 1px solid rgba(239, 68, 68, 0.25);
+        padding: 20px;
+        border-radius: 15px;
+        background-color: rgba(255, 80, 80, 0.08);
+        border: 1px solid rgba(255, 80, 80, 0.25);
     }
 
     .safe-box {
-        padding: 1rem;
-        border-radius: 14px;
-        background: rgba(16, 185, 129, 0.08);
-        border: 1px solid rgba(16, 185, 129, 0.25);
+        padding: 20px;
+        border-radius: 15px;
+        background-color: rgba(50, 200, 100, 0.08);
+        border: 1px solid rgba(50, 200, 100, 0.25);
     }
 
     .warning-box {
-        padding: 1rem;
-        border-radius: 14px;
-        background: rgba(245, 158, 11, 0.08);
-        border: 1px solid rgba(245, 158, 11, 0.25);
+        padding: 20px;
+        border-radius: 15px;
+        background-color: rgba(255, 190, 50, 0.10);
+        border: 1px solid rgba(255, 190, 50, 0.30);
     }
 
-    .info-box {
-        padding: 1rem;
-        border-radius: 14px;
-        background: rgba(59, 130, 246, 0.08);
-        border: 1px solid rgba(59, 130, 246, 0.25);
+    .keyword {
+        display: inline-block;
+        padding: 5px 10px;
+        margin: 3px;
+        border-radius: 8px;
+        background: #ffdddd;
+    }
+
+    .game-counter {
+        text-align: center;
+        font-size: 17px;
+        font-weight: 700;
+        margin: 10px 0 20px 0;
     }
 
     </style>
@@ -159,71 +130,65 @@ st.markdown(
 
 
 # =========================================================
-# 5. HEADER
+# 4. HEADER
 # =========================================================
 
 st.markdown(
-    """
-    <div class="hero">
-        <div class="hero-title">🛡️ Lá Chắn Số THPT</div>
-        <div class="hero-subtitle">
-            Công cụ hỗ trợ học sinh nhận diện tin nhắn và tình huống có dấu hiệu lừa đảo.
-        </div>
-    </div>
-    """,
+    '<div class="main-title">🛡️ LÁ CHẮN SỐ THÔNG MINH</div>',
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '<div class="subtitle">'
+    'Hệ thống phát hiện và phân tích thao túng tâm lý trong tin nhắn trực tuyến'
+    '</div>',
     unsafe_allow_html=True
 )
 
 
 # =========================================================
-# 6. TIỆN ÍCH
+# 5. COOLDOWN API
 # =========================================================
 
 def can_call_api():
-    """
-    Kiểm tra cooldown trước khi gọi Gemini.
-    """
 
     now = time.time()
-    elapsed = now - st.session_state.last_api_call
+
+    elapsed = (
+        now
+        - st.session_state.last_api_call
+    )
 
     if elapsed < COOLDOWN_SECONDS:
-        remaining = COOLDOWN_SECONDS - elapsed
+
+        remaining = int(
+            COOLDOWN_SECONDS
+            - elapsed
+            + 0.99
+        )
+
         return False, remaining
 
     return True, 0
 
 
-def mark_api_call():
-    st.session_state.last_api_call = time.time()
-
-
-def safe_text(value):
-    """
-    Chuyển dữ liệu bất kỳ thành string an toàn.
-    """
-
-    if value is None:
-        return ""
-
-    if isinstance(value, str):
-        return value.strip()
-
-    return str(value).strip()
-
-
 # =========================================================
-# 7. PARSE JSON
+# 6. JSON EXTRACTOR
 # =========================================================
 
 def extract_json(text):
     """
-    Cố gắng lấy JSON từ phản hồi Gemini.
+    Gemini có thể trả JSON:
+        {...}
 
-    Hỗ trợ:
-    - JSON thuần
-    - ```json ... ```
-    - JSON nằm giữa phần text khác
+    hoặc:
+        ```json
+        {...}
+        ```
+
+    hoặc có văn bản trước/sau JSON.
+
+    Hàm này cố gắng lấy JSON thực tế.
     """
 
     if not text:
@@ -231,1409 +196,3569 @@ def extract_json(text):
 
     text = text.strip()
 
+    # -----------------------------------------------------
+    # Cách 1: JSON nguyên bản
+    # -----------------------------------------------------
+
     try:
         return json.loads(text)
     except Exception:
         pass
 
-    fenced = re.search(
-        r"```(?:json)?\s*(.*?)\s*```",
+    # -----------------------------------------------------
+    # Cách 2: Code fence
+    # -----------------------------------------------------
+
+    cleaned = re.sub(
+        r"^```(?:json)?\s*",
+        "",
         text,
-        re.DOTALL | re.IGNORECASE
+        flags=re.IGNORECASE
     )
 
-    if fenced:
-        candidate = fenced.group(1).strip()
+    cleaned = re.sub(
+        r"\s*```$",
+        "",
+        cleaned
+    )
 
-        try:
-            return json.loads(candidate)
-        except Exception:
-            pass
+    cleaned = cleaned.strip()
 
-    start = text.find("{")
-    end = text.rfind("}")
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
 
-    if start != -1 and end > start:
-        candidate = text[start:end + 1]
+    # -----------------------------------------------------
+    # Cách 3: tìm JSON object
+    # -----------------------------------------------------
 
-        try:
-            return json.loads(candidate)
-        except Exception:
-            pass
+    first = cleaned.find("{")
 
-    start = text.find("[")
-    end = text.rfind("]")
+    if first != -1:
 
-    if start != -1 and end > start:
-        candidate = text[start:end + 1]
+        depth = 0
+        in_string = False
+        escape = False
 
-        try:
-            return json.loads(candidate)
-        except Exception:
-            pass
+        for index in range(
+            first,
+            len(cleaned)
+        ):
+
+            char = cleaned[index]
+
+            if in_string:
+
+                if escape:
+
+                    escape = False
+
+                elif char == "\\":
+
+                    escape = True
+
+                elif char == '"':
+
+                    in_string = False
+
+                continue
+
+            if char == '"':
+
+                in_string = True
+
+            elif char == "{":
+
+                depth += 1
+
+            elif char == "}":
+
+                depth -= 1
+
+                if depth == 0:
+
+                    candidate = cleaned[
+                        first:index + 1
+                    ]
+
+                    try:
+                        return json.loads(
+                            candidate
+                        )
+                    except Exception:
+                        break
+
+    # -----------------------------------------------------
+    # Cách 4: JSON array
+    # -----------------------------------------------------
+
+    first = cleaned.find("[")
+
+    if first != -1:
+
+        depth = 0
+        in_string = False
+        escape = False
+
+        for index in range(
+            first,
+            len(cleaned)
+        ):
+
+            char = cleaned[index]
+
+            if in_string:
+
+                if escape:
+
+                    escape = False
+
+                elif char == "\\":
+
+                    escape = True
+
+                elif char == '"':
+
+                    in_string = False
+
+                continue
+
+            if char == '"':
+
+                in_string = True
+
+            elif char == "[":
+
+                depth += 1
+
+            elif char == "]":
+
+                depth -= 1
+
+                if depth == 0:
+
+                    candidate = cleaned[
+                        first:index + 1
+                    ]
+
+                    try:
+                        return json.loads(
+                            candidate
+                        )
+                    except Exception:
+                        break
 
     return None
 
 
 # =========================================================
-# 8. TÍNH ĐIỂM RỦI RO LOCAL
+# 7. GEMINI API
 # =========================================================
 
-def calculate_risk_score(message):
-    """
-    Bộ phân tích local.
-
-    Gemini KHÔNG quyết định điểm cuối cùng.
-    Điều này giúp app vẫn hoạt động ngay cả khi API lỗi.
-    """
-
-    text = safe_text(message).lower()
-
-    score = 0
-    detected = []
-    signals = []
-
-    password_patterns = [
-        r"\bmật khẩu\b",
-        r"\bpassword\b",
-        r"\bpass\b",
-        r"\btài khoản\b",
-        r"\baccount\b",
-        r"\bđăng nhập\b",
-        r"\blogin\b",
-    ]
-
-    if any(re.search(p, text) for p in password_patterns):
-        score += 18
-        detected.append("Yêu cầu thông tin tài khoản")
-        signals.append("Tin nhắn đề cập đến tài khoản hoặc mật khẩu.")
-
-    otp_patterns = [
-        r"\botp\b",
-        r"mã xác minh",
-        r"mã xác thực",
-        r"mã đăng nhập",
-        r"verification code",
-        r"mã bảo mật",
-    ]
-
-    if any(re.search(p, text) for p in otp_patterns):
-        score += 25
-        detected.append("Thu thập mã xác thực")
-        signals.append("Có dấu hiệu yêu cầu hoặc đề cập đến mã OTP/xác minh.")
-
-    money_patterns = [
-        r"\bchuyển khoản\b",
-        r"\bchuyển tiền\b",
-        r"\bthanh toán\b",
-        r"\bnạp tiền\b",
-        r"\bphí\b",
-        r"\btiền\b",
-        r"\bvnd\b",
-        r"\bđồng\b",
-        r"\btriệu\b",
-        r"\bnghìn\b",
-        r"\busd\b",
-    ]
-
-    if any(re.search(p, text) for p in money_patterns):
-        score += 22
-        detected.append("Yếu tố tiền bạc")
-        signals.append("Tin nhắn có liên quan đến tiền hoặc giao dịch.")
-
-    link_patterns = [
-        r"https?://",
-        r"www\.",
-        r"\bbit\.ly\b",
-        r"\btinyurl\b",
-        r"\blink\b",
-        r"\bđường dẫn\b",
-        r"\btruy cập\b",
-    ]
-
-    if any(re.search(p, text) for p in link_patterns):
-        score += 18
-        detected.append("Liên kết đáng chú ý")
-        signals.append("Tin nhắn có chứa hoặc nhắc đến đường dẫn.")
-
-    urgency_patterns = [
-        r"\bgấp\b",
-        r"\bkhẩn cấp\b",
-        r"\bngay lập tức\b",
-        r"\bngay\b",
-        r"\bhạn cuối\b",
-        r"\bsắp hết hạn\b",
-        r"\btrong hôm nay\b",
-        r"\b5 phút\b",
-        r"\b10 phút\b",
-        r"\b30 phút\b",
-    ]
-
-    if any(re.search(p, text) for p in urgency_patterns):
-        score += 15
-        detected.append("Tạo cảm giác khẩn cấp")
-        signals.append("Người nhận bị thúc ép phải hành động nhanh.")
-
-    threat_patterns = [
-        r"\bkhóa tài khoản\b",
-        r"\bkhóa\b",
-        r"\bphạt\b",
-        r"\bcông an\b",
-        r"\btòa án\b",
-        r"\bkiện\b",
-        r"\bxử lý\b",
-        r"\bvi phạm\b",
-        r"\btruy cứu\b",
-    ]
-
-    if any(re.search(p, text) for p in threat_patterns):
-        score += 20
-        detected.append("Đe dọa / gây áp lực")
-        signals.append("Có ngôn ngữ tạo sợ hãi hoặc áp lực.")
-
-    impersonation_patterns = [
-        r"\bngân hàng\b",
-        r"\bcông an\b",
-        r"\bnhà trường\b",
-        r"\bgiáo viên\b",
-        r"\bshipper\b",
-        r"\bcơ quan\b",
-        r"\bfacebook\b",
-        r"\bzalo\b",
-        r"\bgoogle\b",
-        r"\bmicrosoft\b",
-        r"\bnhân viên\b",
-    ]
-
-    if any(re.search(p, text) for p in impersonation_patterns):
-        score += 15
-        detected.append("Dấu hiệu mạo danh")
-        signals.append("Tin nhắn có thể đang sử dụng danh nghĩa của một tổ chức/người khác.")
-
-    personal_patterns = [
-        r"\bcccd\b",
-        r"\bcmnd\b",
-        r"\bsố điện thoại\b",
-        r"\bđịa chỉ\b",
-        r"\bngày sinh\b",
-        r"\bhọ tên\b",
-        r"\bthông tin cá nhân\b",
-        r"\bsố tài khoản\b",
-    ]
-
-    if any(re.search(p, text) for p in personal_patterns):
-        score += 17
-        detected.append("Thu thập thông tin cá nhân")
-        signals.append("Có dấu hiệu yêu cầu thông tin cá nhân hoặc định danh.")
-
-    reward_patterns = [
-        r"\btrúng thưởng\b",
-        r"\bgiải thưởng\b",
-        r"\bquà tặng\b",
-        r"\bnhận quà\b",
-        r"\btrúng\b",
-        r"\bthưởng\b",
-        r"\bkhuyến mãi\b",
-        r"\bmiễn phí\b",
-    ]
-
-    if any(re.search(p, text) for p in reward_patterns):
-        score += 15
-        detected.append("Mồi quà tặng / phần thưởng")
-        signals.append("Tin nhắn sử dụng lợi ích hoặc phần thưởng để thu hút.")
-
-    secrecy_patterns = [
-        r"\bđừng nói\b",
-        r"\bkhông được nói\b",
-        r"\bgiữ bí mật\b",
-        r"\bkhông cho ai biết\b",
-        r"\bđừng kể\b",
-    ]
-
-    if any(re.search(p, text) for p in secrecy_patterns):
-        score += 15
-        detected.append("Yêu cầu giữ bí mật")
-        signals.append("Có dấu hiệu muốn người nhận không trao đổi với người khác.")
-
-    action_patterns = [
-        r"\bclick\b",
-        r"\bbấm\b",
-        r"\bnhấn\b",
-        r"\bgửi\b",
-        r"\bcung cấp\b",
-        r"\bđăng nhập\b",
-        r"\bchuyển\b",
-        r"\btải\b",
-        r"\bcài\b",
-    ]
-
-    if any(re.search(p, text) for p in action_patterns):
-        score += 10
-        detected.append("Thúc đẩy hành động")
-        signals.append("Tin nhắn yêu cầu người nhận thực hiện một hành động cụ thể.")
-
-    if (
-        any(re.search(p, text) for p in otp_patterns)
-        and any(re.search(p, text) for p in action_patterns)
-    ):
-        score += 12
-
-    if (
-        any(re.search(p, text) for p in money_patterns)
-        and any(re.search(p, text) for p in urgency_patterns)
-    ):
-        score += 12
-
-    if (
-        any(re.search(p, text) for p in link_patterns)
-        and any(re.search(p, text) for p in urgency_patterns)
-    ):
-        score += 10
-
-    if (
-        any(re.search(p, text) for p in impersonation_patterns)
-        and any(re.search(p, text) for p in money_patterns)
-    ):
-        score += 12
-
-    if (
-        any(re.search(p, text) for p in threat_patterns)
-        and any(re.search(p, text) for p in action_patterns)
-    ):
-        score += 10
-
-    score = min(100, max(0, score))
-
-    if score >= 70:
-        level = "Rất cao"
-    elif score >= 45:
-        level = "Cao"
-    elif score >= 25:
-        level = "Trung bình"
-    else:
-        level = "Thấp"
-
-    return {
-        "risk_score": score,
-        "risk_level": level,
-        "detected_strategies": detected,
-        "manipulation_signals": signals,
-    }
-
-
-# =========================================================
-# 9. FALLBACK ANALYSIS
-# =========================================================
-
-def fallback_analysis(message, local_result=None):
-    """
-    Phân tích hoàn toàn bằng rule engine khi Gemini không hoạt động.
-    """
-
-    if local_result is None:
-        local_result = calculate_risk_score(message)
-
-    score = local_result["risk_score"]
-    level = local_result["risk_level"]
-
-    strategies = local_result.get("detected_strategies", [])
-    signals = local_result.get("manipulation_signals", [])
-
-    if score >= 70:
-        main_strategy = (
-            "Tin nhắn có nhiều dấu hiệu gây áp lực, "
-            "yêu cầu hành động hoặc thu thập thông tin nhạy cảm."
-        )
-
-        mechanism = (
-            "Người gửi có thể đang kết hợp nhiều kỹ thuật như "
-            "tạo khẩn cấp, gây sợ hãi, mạo danh hoặc đánh vào lợi ích."
-        )
-
-    elif score >= 45:
-        main_strategy = (
-            "Tin nhắn có một số dấu hiệu đáng chú ý liên quan đến "
-            "tài khoản, tiền bạc, liên kết hoặc hành động khẩn cấp."
-        )
-
-        mechanism = (
-            "Nội dung có thể đang tạo áp lực để người nhận "
-            "ra quyết định nhanh trước khi kiểm tra thông tin."
-        )
-
-    elif score >= 25:
-        main_strategy = (
-            "Tin nhắn có một vài dấu hiệu cần kiểm tra thêm."
-        )
-
-        mechanism = (
-            "Một số yếu tố trong nội dung có thể khiến người nhận "
-            "hành động mà chưa xác minh nguồn gửi."
-        )
-
-    else:
-        main_strategy = (
-            "Chưa phát hiện nhiều dấu hiệu rõ ràng từ các quy tắc hiện tại."
-        )
-
-        mechanism = (
-            "Không có nhiều tín hiệu thuộc các nhóm rủi ro được hệ thống theo dõi."
-        )
-
-    recommended_actions = [
-        "Không cung cấp mật khẩu hoặc mã OTP.",
-        "Không chuyển tiền chỉ vì một tin nhắn yêu cầu.",
-        "Không bấm vào liên kết đáng ngờ.",
-        "Kiểm tra thông tin bằng kênh chính thức.",
-        "Nếu thấy bất thường, hãy hỏi phụ huynh, giáo viên hoặc người lớn đáng tin cậy."
-    ]
-
-    evidence = []
-
-    if signals:
-        evidence.extend(signals)
-
-    if not evidence:
-        evidence.append(
-            "Chưa phát hiện tín hiệu mạnh theo bộ quy tắc hiện tại."
-        )
-
-    reasoning = (
-        "Kết quả dự phòng được tạo bằng bộ quy tắc nhận diện dấu hiệu "
-        "lừa đảo của ứng dụng, không phải bởi Gemini."
-    )
-
-    return {
-        "risk_score": score,
-        "risk_level": level,
-        "main_strategy": main_strategy,
-        "detected_strategies": strategies,
-        "manipulation_signals": signals,
-        "evidence": evidence,
-        "psychological_mechanism": mechanism,
-        "recommended_actions": recommended_actions,
-        "reasoning": reasoning,
-    }
-
-
-# =========================================================
-# 10. PROMPT GEMINI
-# =========================================================
-
-ANALYSIS_SYSTEM = """
-Bạn là trợ lý phân tích an toàn số cho học sinh THPT Việt Nam.
-
-Nhiệm vụ:
-Phân tích một tin nhắn và xác định các dấu hiệu có thể liên quan đến lừa đảo,
-mạo danh, thao túng tâm lý, thu thập thông tin hoặc thúc đẩy hành động nguy hiểm.
-
-QUAN TRỌNG:
-- Không tự bịa thông tin.
-- Chỉ dựa trên nội dung được cung cấp.
-- Không khẳng định chắc chắn rằng một tin nhắn là lừa đảo nếu chưa đủ bằng chứng.
-- Điểm rủi ro cuối cùng được ứng dụng tính bằng bộ quy tắc riêng.
-- Gemini chỉ hỗ trợ giải thích và nhận diện dấu hiệu.
-- Trả về JSON hợp lệ.
-"""
-
-
-# =========================================================
-# 11. GỌI GEMINI
-# =========================================================
-
-def call_gemini(message):
-    """
-    Gọi Gemini REST API.
-
-    Xử lý:
-    - cooldown
-    - lỗi 503/502/500/504 bằng exponential backoff
-    - thử lại model dự phòng nếu model chính gặp lỗi tạm thời
-    - fallback local nếu API không hoạt động
-    """
+def call_gemini(
+    prompt,
+    system_instruction,
+    json_mode=True,
+    max_attempts=GEMINI_MAX_ATTEMPTS
+):
 
     if not API_KEY:
+
         return {
             "success": False,
-            "data": None,
-            "error": "Chưa tìm thấy GEMINI_API_KEY trong Streamlit Secrets.",
-            "status": None,
+            "error": (
+                "Chưa cấu hình GEMINI_API_KEY."
+            ),
+            "error_code": "NO_API_KEY"
         }
+
 
     allowed, remaining = can_call_api()
 
     if not allowed:
+
         return {
             "success": False,
-            "data": None,
             "error": (
-                f"Đang chờ cooldown. "
-                f"Vui lòng thử lại sau {remaining:.1f} giây."
+                f"⏳ Vui lòng chờ {remaining} giây "
+                "trước khi gửi yêu cầu tiếp theo."
             ),
-            "status": "COOLDOWN",
+            "error_code": "COOLDOWN"
         }
 
-    mark_api_call()
 
-    message = safe_text(message)[:MAX_ANALYSIS_CHARS]
+    st.session_state.last_api_call = time.time()
 
-    response_schema = {
-        "type": "OBJECT",
-        "properties": {
-            "main_strategy": {
-                "type": "STRING"
-            },
-            "detected_strategies": {
-                "type": "ARRAY",
-                "items": {
-                    "type": "STRING"
-                }
-            },
-            "manipulation_signals": {
-                "type": "ARRAY",
-                "items": {
-                    "type": "STRING"
-                }
-            },
-            "evidence": {
-                "type": "ARRAY",
-                "items": {
-                    "type": "STRING"
-                }
-            },
-            "psychological_mechanism": {
-                "type": "STRING"
-            },
-            "recommended_actions": {
-                "type": "ARRAY",
-                "items": {
-                    "type": "STRING"
-                }
-            },
-            "reasoning": {
-                "type": "STRING"
-            }
-        },
-        "required": [
-            "main_strategy",
-            "detected_strategies",
-            "manipulation_signals",
-            "evidence",
-            "psychological_mechanism",
-            "recommended_actions",
-            "reasoning"
-        ]
+
+    url = (
+        "https://generativelanguage.googleapis.com/"
+        f"v1beta/models/{MODEL}:generateContent"
+        f"?key={API_KEY}"
+    )
+
+
+    generation_config = {
+        "temperature": 0.2,
+        "maxOutputTokens": 1200
     }
 
-    payload = {
+
+    if json_mode:
+
+        generation_config[
+            "responseMimeType"
+        ] = "application/json"
+
+
+    data = {
+
         "systemInstruction": {
             "parts": [
                 {
-                    "text": ANALYSIS_SYSTEM
+                    "text": system_instruction
                 }
             ]
         },
+
         "contents": [
             {
                 "role": "user",
                 "parts": [
                     {
-                        "text": (
-                            "Hãy phân tích tin nhắn sau:\n\n"
-                            f"{message}\n\n"
-                            "Chỉ trả về JSON theo schema được yêu cầu."
-                        )
+                        "text": prompt
                     }
                 ]
             }
         ],
-        "generationConfig": {
-            "maxOutputTokens": 1000,
-            "responseMimeType": "application/json",
-            "responseSchema": response_schema
-        }
+
+        "generationConfig": generation_config
     }
 
-    data = json.dumps(
-        payload,
+
+    payload = json.dumps(
+        data,
         ensure_ascii=False
     ).encode("utf-8")
 
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": API_KEY,
-    }
 
-    models_to_try = [MODEL, FALLBACK_MODEL]
+    last_error_code = None
 
-    last_error = None
-    last_status = None
 
-    for model_index, current_model in enumerate(models_to_try):
+    for attempt in range(
+        max_attempts
+    ):
 
-        url = (
-            "https://generativelanguage.googleapis.com/"
-            f"v1beta/models/{current_model}:generateContent"
-        )
+        try:
 
-        for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={
+                    "Content-Type":
+                        "application/json; charset=utf-8"
+                },
+                method="POST"
+            )
 
-            try:
 
-                request = urllib.request.Request(
-                    url,
-                    data=data,
-                    headers=headers,
-                    method="POST"
+            with urllib.request.urlopen(
+                req,
+                timeout=GEMINI_TIMEOUT
+            ) as response:
+
+                raw_response = (
+                    response
+                    .read()
+                    .decode(
+                        "utf-8",
+                        errors="ignore"
+                    )
                 )
 
-                with urllib.request.urlopen(
-                    request,
-                    timeout=GEMINI_TIMEOUT
-                ) as response:
 
-                    status_code = response.getcode()
+            result = json.loads(
+                raw_response
+            )
 
-                    raw = response.read().decode(
-                        "utf-8",
-                        errors="replace"
-                    )
 
-                last_status = status_code
+            candidates = result.get(
+                "candidates",
+                []
+            )
 
-                if 200 <= status_code < 300:
 
-                    try:
-                        result = json.loads(raw)
-                    except json.JSONDecodeError:
-                        return {
-                            "success": False,
-                            "data": None,
-                            "error": (
-                                f"{current_model} trả về dữ liệu "
-                                "không phải JSON hợp lệ."
-                            ),
-                            "status": status_code,
-                        }
+            if not candidates:
 
-                    candidates = result.get("candidates", [])
+                return {
+                    "success": False,
+                    "error": (
+                        "Gemini không trả về candidate."
+                    ),
+                    "error_code":
+                        "EMPTY_RESPONSE"
+                }
 
-                    if not candidates:
-                        return {
-                            "success": False,
-                            "data": None,
-                            "error": (
-                                f"{current_model} không trả về candidate nào."
-                            ),
-                            "status": status_code,
-                        }
 
-                    candidate = candidates[0]
+            candidate = candidates[0]
 
-                    finish_reason = candidate.get(
-                        "finishReason",
+
+            finish_reason = candidate.get(
+                "finishReason",
+                ""
+            )
+
+
+            if finish_reason in [
+                "SAFETY",
+                "BLOCKLIST",
+                "PROHIBITED_CONTENT",
+                "SPII"
+            ]:
+
+                return {
+                    "success": False,
+                    "error": (
+                        "Gemini đã chặn phản hồi "
+                        "vì chính sách an toàn nội dung."
+                    ),
+                    "error_code": "SAFETY"
+                }
+
+
+            content = candidate.get(
+                "content",
+                {}
+            )
+
+
+            parts = content.get(
+                "parts",
+                []
+            )
+
+
+            response_text = ""
+
+
+            for part in parts:
+
+                if isinstance(
+                    part,
+                    dict
+                ):
+
+                    part_text = part.get(
+                        "text",
                         ""
                     )
 
-                    if finish_reason in {
-                        "SAFETY",
-                        "BLOCKLIST",
-                        "PROHIBITED_CONTENT",
-                        "SPII"
-                    }:
-                        return {
-                            "success": False,
-                            "data": None,
-                            "error": (
-                                f"{current_model} đã chặn phản hồi "
-                                "vì bộ lọc an toàn."
-                            ),
-                            "status": status_code,
-                        }
+                    if part_text:
 
-                    content = candidate.get("content", {})
-                    parts = content.get("parts", [])
-
-                    text_parts = []
-
-                    for part in parts:
-                        if isinstance(part, dict):
-                            part_text = part.get("text")
-
-                            if part_text:
-                                text_parts.append(part_text)
-
-                    response_text = "\n".join(
-                        text_parts
-                    ).strip()
-
-                    if not response_text:
-                        return {
-                            "success": False,
-                            "data": None,
-                            "error": (
-                                f"{current_model} không trả về nội dung. "
-                                f"finishReason="
-                                f"{finish_reason or 'UNKNOWN'}"
-                            ),
-                            "status": status_code,
-                        }
-
-                    parsed = extract_json(response_text)
-
-                    if parsed is None:
-                        return {
-                            "success": False,
-                            "data": None,
-                            "error": (
-                                f"{current_model} trả về nội dung "
-                                "nhưng không parse được JSON."
-                            ),
-                            "status": status_code,
-                        }
-
-                    return {
-                        "success": True,
-                        "data": parsed,
-                        "error": None,
-                        "status": status_code,
-                    }
-
-            except urllib.error.HTTPError as e:
-
-                status_code = e.code
-                last_status = status_code
-
-                try:
-                    error_body = e.read().decode(
-                        "utf-8",
-                        errors="replace"
-                    )
-                except Exception:
-                    error_body = ""
-
-                error_message = ""
-
-                try:
-                    parsed_error = json.loads(error_body)
-
-                    error_message = (
-                        parsed_error
-                        .get("error", {})
-                        .get("message", "")
-                    )
-                except Exception:
-                    pass
-
-                if not error_message:
-                    error_message = error_body[:600]
-
-                if status_code == 400:
-                    return {
-                        "success": False,
-                        "data": None,
-                        "error": (
-                            "HTTP 400 - Request không hợp lệ.\n"
-                            f"{error_message}"
-                        ),
-                        "status": 400,
-                    }
-
-                if status_code == 401:
-                    return {
-                        "success": False,
-                        "data": None,
-                        "error": (
-                            "HTTP 401 - API key không hợp lệ "
-                            "hoặc không được xác thực."
-                        ),
-                        "status": 401,
-                    }
-
-                if status_code == 403:
-                    return {
-                        "success": False,
-                        "data": None,
-                        "error": (
-                            "HTTP 403 - API key không có quyền "
-                            "gọi API này.\n"
-                            f"{error_message}"
-                        ),
-                        "status": 403,
-                    }
-
-                if status_code == 404:
-                    return {
-                        "success": False,
-                        "data": None,
-                        "error": (
-                            "HTTP 404 - Không tìm thấy model/API endpoint.\n"
-                            f"Model: {current_model}\n"
-                            f"{error_message}"
-                        ),
-                        "status": 404,
-                    }
-
-                if status_code == 429:
-                    return {
-                        "success": False,
-                        "data": None,
-                        "error": (
-                            "HTTP 429 - Gemini đang giới hạn "
-                            "tần suất hoặc quota API.\n"
-                            f"{error_message}"
-                        ),
-                        "status": 429,
-                    }
-
-                if status_code in {500, 502, 503, 504}:
-
-                    last_error = (
-                        f"HTTP {status_code} - {current_model} "
-                        "đang gặp lỗi tạm thời.\n"
-                        f"{error_message}"
-                    )
-
-                    if attempt < GEMINI_MAX_ATTEMPTS:
-
-                        delay = (
-                            (2 ** (attempt - 1))
-                            + random.uniform(0.5, 1.5)
+                        response_text += (
+                            part_text
                         )
 
-                        time.sleep(delay)
-                        continue
 
-                    # Model hiện tại đã hết số lần thử.
-                    break
+            response_text = (
+                response_text.strip()
+            )
 
-                return {
-                    "success": False,
-                    "data": None,
-                    "error": (
-                        f"HTTP {status_code}.\n"
-                        f"{error_message}"
-                    ),
-                    "status": status_code,
-                }
 
-            except urllib.error.URLError as e:
-
-                last_error = (
-                    f"Không kết nối được tới {current_model}.\n"
-                    f"Chi tiết: {e}"
-                )
-
-                if attempt < GEMINI_MAX_ATTEMPTS:
-                    time.sleep(
-                        1 + random.uniform(0.2, 0.8)
-                    )
-                    continue
-
-                break
-
-            except TimeoutError:
-
-                last_error = (
-                    f"{current_model} không phản hồi trong "
-                    f"{GEMINI_TIMEOUT} giây."
-                )
-
-                if attempt < GEMINI_MAX_ATTEMPTS:
-                    time.sleep(
-                        1 + random.uniform(0.2, 0.8)
-                    )
-                    continue
-
-                break
-
-            except Exception as e:
+            if not response_text:
 
                 return {
                     "success": False,
-                    "data": None,
                     "error": (
-                        f"Lỗi không xác định khi gọi "
-                        f"{current_model}: {e}"
+                        "Gemini trả về nội dung rỗng."
                     ),
-                    "status": "UNKNOWN",
+                    "error_code":
+                        "EMPTY_TEXT"
                 }
 
-        # Chỉ chuyển sang model dự phòng nếu model chính
-        # gặp lỗi tạm thời 500/502/503/504.
-        if (
-            model_index == 0
-            and last_status in {500, 502, 503, 504}
-        ):
-            continue
 
-        break
+            return {
+                "success": True,
+                "text": response_text
+            }
+
+
+        # =================================================
+        # HTTP ERROR
+        # =================================================
+
+        except urllib.error.HTTPError as e:
+
+            last_error_code = e.code
+
+
+            # -------------------------------------------------
+            # 503
+            # -------------------------------------------------
+
+            if e.code == 503:
+
+                if attempt < max_attempts - 1:
+
+                    base_delay = (
+                        2 ** attempt
+                    )
+
+                    jitter = random.uniform(
+                        0.5,
+                        1.5
+                    )
+
+                    wait_time = min(
+                        base_delay + jitter,
+                        8
+                    )
+
+                    with st.spinner(
+                        "⏳ Gemini đang bận, "
+                        f"thử lại sau "
+                        f"{wait_time:.1f} giây..."
+                    ):
+
+                        time.sleep(
+                            wait_time
+                        )
+
+                    continue
+
+
+                return {
+                    "success": False,
+                    "error": (
+                        "⚠️ Gemini đang quá tải."
+                    ),
+                    "error_code": 503
+                }
+
+
+            # -------------------------------------------------
+            # 429
+            # -------------------------------------------------
+
+            if e.code == 429:
+
+                return {
+                    "success": False,
+                    "error": (
+                        "⚠️ Gemini đang giới hạn API "
+                        "(HTTP 429)."
+                    ),
+                    "error_code": 429
+                }
+
+
+            # -------------------------------------------------
+            # 400
+            # -------------------------------------------------
+
+            if e.code == 400:
+
+                try:
+
+                    error_body = (
+                        e.read()
+                        .decode(
+                            "utf-8",
+                            errors="ignore"
+                        )
+                    )
+
+                except Exception:
+
+                    error_body = ""
+
+
+                return {
+                    "success": False,
+                    "error": (
+                        "❌ Yêu cầu gửi tới Gemini "
+                        "không hợp lệ (HTTP 400).\n\n"
+                        f"{error_body[:500]}"
+                    ),
+                    "error_code": 400
+                }
+
+
+            # -------------------------------------------------
+            # 401 / 403
+            # -------------------------------------------------
+
+            if e.code in [
+                401,
+                403
+            ]:
+
+                return {
+                    "success": False,
+                    "error": (
+                        f"🔑 API key hoặc quyền truy cập "
+                        f"có vấn đề (HTTP {e.code})."
+                    ),
+                    "error_code": e.code
+                }
+
+
+            # -------------------------------------------------
+            # 500 / 502 / 504
+            # -------------------------------------------------
+
+            if e.code in [
+                500,
+                502,
+                504
+            ]:
+
+                if attempt < max_attempts - 1:
+
+                    wait_time = min(
+                        2 ** attempt + 1,
+                        6
+                    )
+
+                    time.sleep(
+                        wait_time
+                    )
+
+                    continue
+
+
+                return {
+                    "success": False,
+                    "error": (
+                        f"⚠️ Gemini gặp lỗi "
+                        f"HTTP {e.code}."
+                    ),
+                    "error_code": e.code
+                }
+
+
+            return {
+                "success": False,
+                "error": (
+                    f"❌ Gemini API lỗi HTTP {e.code}."
+                ),
+                "error_code": e.code
+            }
+
+
+        # =================================================
+        # NETWORK
+        # =================================================
+
+        except urllib.error.URLError:
+
+            last_error_code = "NETWORK"
+
+
+            if attempt < max_attempts - 1:
+
+                time.sleep(
+                    2 ** attempt
+                )
+
+                continue
+
+
+            return {
+                "success": False,
+                "error": (
+                    "🌐 Không kết nối được tới Gemini."
+                ),
+                "error_code": "NETWORK"
+            }
+
+
+        # =================================================
+        # TIMEOUT
+        # =================================================
+
+        except TimeoutError:
+
+            last_error_code = "TIMEOUT"
+
+
+            if attempt < max_attempts - 1:
+
+                time.sleep(2)
+
+                continue
+
+
+            return {
+                "success": False,
+                "error": (
+                    "⏱️ Gemini phản hồi quá lâu."
+                ),
+                "error_code": "TIMEOUT"
+            }
+
+
+        # =================================================
+        # JSON ERROR
+        # =================================================
+
+        except json.JSONDecodeError:
+
+            return {
+                "success": False,
+                "error": (
+                    "❌ Gemini trả về dữ liệu "
+                    "không hợp lệ."
+                ),
+                "error_code":
+                    "INVALID_RESPONSE"
+            }
+
+
+        # =================================================
+        # OTHER
+        # =================================================
+
+        except Exception as e:
+
+            return {
+                "success": False,
+                "error": (
+                    f"❌ Lỗi hệ thống: {str(e)}"
+                ),
+                "error_code":
+                    "UNKNOWN"
+            }
+
 
     return {
         "success": False,
-        "data": None,
-        "error": last_error or "Gemini không phản hồi.",
-        "status": last_status,
+        "error": (
+            "⚠️ Không thể nhận phản hồi Gemini."
+        ),
+        "error_code": last_error_code
     }
 
 
 # =========================================================
-# 12. PHÂN TÍCH TIN NHẮN
+# 8. BỘ TỪ KHÓA RỦI RO
+# =========================================================
+
+PASSWORD_KEYWORDS = [
+    "mật khẩu",
+    "mat khau",
+    "password",
+    "pass",
+    "mã đăng nhập",
+    "ma dang nhap",
+    "thông tin đăng nhập",
+    "thong tin dang nhap"
+]
+
+
+OTP_KEYWORDS = [
+    "otp",
+    "mã otp",
+    "ma otp",
+    "mã xác thực",
+    "ma xac thuc",
+    "mã xác nhận",
+    "ma xac nhan",
+    "mã bảo mật",
+    "ma bao mat",
+    "verification code",
+    "mã code",
+    "ma code"
+]
+
+
+MONEY_ACTION_KEYWORDS = [
+    "chuyển tiền",
+    "chuyen tien",
+    "chuyển khoản",
+    "chuyen khoan",
+    "gửi tiền",
+    "gui tien",
+    "nộp tiền",
+    "nop tien",
+    "thanh toán",
+    "thanh toan",
+    "nạp tiền",
+    "nap tien",
+    "gửi phí",
+    "gui phi",
+    "đóng phí",
+    "dong phi",
+    "đóng tiền",
+    "dong tien",
+    "nộp phí",
+    "nop phi",
+    "phí kích hoạt",
+    "phi kich hoat"
+]
+
+
+MONEY_UNIT_KEYWORDS = [
+    "tỷ",
+    "ty",
+    "triệu",
+    "trieu",
+    "nghìn",
+    "nghin",
+    "ngàn",
+    "ngan",
+    "vnđ",
+    "vnd",
+    "đồng",
+    "dong"
+]
+
+
+LINK_KEYWORDS = [
+    "http://",
+    "https://",
+    "www.",
+    "bit.ly",
+    "tinyurl",
+    "goo.gl",
+    "link này",
+    "link nay",
+    "bấm link",
+    "bam link",
+    "nhấn link",
+    "nhan link",
+    "truy cập link",
+    "truy cap link",
+    ".com/",
+    ".vn/"
+]
+
+
+URGENCY_KEYWORDS = [
+    "ngay lập tức",
+    "ngay lap tuc",
+    "lập tức",
+    "lap tuc",
+    "ngay",
+    "gấp",
+    "gap",
+    "khẩn cấp",
+    "khan cap",
+    "trong 5 phút",
+    "trong 5 phut",
+    "trong 10 phút",
+    "trong 10 phut",
+    "trong 15 phút",
+    "trong 15 phut",
+    "trong hôm nay",
+    "trong hom nay",
+    "hết hạn",
+    "het han",
+    "lần cuối",
+    "lan cuoi",
+    "phải làm ngay",
+    "phai lam ngay"
+]
+
+
+THREAT_KEYWORDS = [
+    "khóa tài khoản",
+    "khoa tai khoan",
+    "bị khóa",
+    "bi khoa",
+    "sẽ bị khóa",
+    "se bi khoa",
+    "phạt",
+    "phat",
+    "công an",
+    "cong an",
+    "vi phạm",
+    "vi pham",
+    "xử phạt",
+    "xu phat",
+    "khởi kiện",
+    "khoi kien",
+    "bắt",
+    "bat",
+    "mất tài khoản",
+    "mat tai khoan",
+    "hủy tài khoản",
+    "huy tai khoan"
+]
+
+
+IMPERSONATION_KEYWORDS = [
+    "nhân viên ngân hàng",
+    "nhan vien ngan hang",
+    "ngân hàng",
+    "ngan hang",
+    "công an",
+    "cong an",
+    "giáo viên",
+    "giao vien",
+    "thầy giáo",
+    "thay giao",
+    "cô giáo",
+    "co giao",
+    "nhà trường",
+    "nha truong",
+    "bộ giáo dục",
+    "bo giao duc",
+    "shipper",
+    "nhân viên",
+    "nhan vien",
+    "chăm sóc khách hàng",
+    "cham soc khach hang",
+    "tổng đài",
+    "tong dai",
+    "admin",
+    "quản trị viên",
+    "quan tri vien"
+]
+
+
+PERSONAL_INFO_KEYWORDS = [
+    "cccd",
+    "căn cước",
+    "can cuoc",
+    "cmnd",
+    "chứng minh nhân dân",
+    "chung minh nhan dan",
+    "số điện thoại",
+    "so dien thoai",
+    "địa chỉ",
+    "dia chi",
+    "ngày sinh",
+    "ngay sinh",
+    "họ tên",
+    "ho ten",
+    "thông tin cá nhân",
+    "thong tin ca nhan",
+    "số tài khoản",
+    "so tai khoan",
+    "tài khoản ngân hàng",
+    "tai khoan ngan hang"
+]
+
+
+REWARD_KEYWORDS = [
+    "trúng thưởng",
+    "trung thuong",
+    "trúng giải",
+    "trung giai",
+    "giải thưởng",
+    "giai thuong",
+    "phần thưởng",
+    "phan thuong",
+    "nhận thưởng",
+    "nhan thuong",
+    "nhận tiền",
+    "nhan tien",
+    "quà tặng",
+    "qua tang",
+    "khuyến mãi",
+    "khuyen mai",
+    "voucher",
+    "học bổng",
+    "hoc bong"
+]
+
+
+SECRECY_KEYWORDS = [
+    "đừng nói với ai",
+    "dung noi voi ai",
+    "không được nói",
+    "khong duoc noi",
+    "giữ bí mật",
+    "giu bi mat",
+    "bí mật",
+    "bi mat",
+    "đừng cho bố mẹ biết",
+    "dung cho bo me biet",
+    "đừng nói cho bố mẹ",
+    "dung noi cho bo me",
+    "đừng nói cho giáo viên",
+    "dung noi cho giao vien"
+]
+
+
+ACTION_KEYWORDS = [
+    "hãy gửi",
+    "hay gui",
+    "hãy nhập",
+    "hay nhap",
+    "hãy cung cấp",
+    "hay cung cap",
+    "gửi cho tôi",
+    "gui cho toi",
+    "cho tôi otp",
+    "cho toi otp",
+    "cho tôi mật khẩu",
+    "cho toi mat khau",
+    "nhập otp",
+    "nhap otp",
+    "nhập mật khẩu",
+    "nhap mat khau",
+    "bấm vào",
+    "bam vao",
+    "nhấn vào",
+    "nhan vao",
+    "chuyển ngay",
+    "chuyen ngay",
+    "gửi ngay",
+    "gui ngay"
+]
+
+
+# =========================================================
+# 9. TÌM TỪ KHÓA
+# =========================================================
+
+def normalize_for_matching(text):
+
+    text = text.lower()
+
+    text = text.replace(
+        "đ",
+        "d"
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text.strip()
+
+
+def find_keywords(
+    text,
+    keywords
+):
+
+    normalized = normalize_for_matching(
+        text
+    )
+
+    found = []
+
+    for keyword in keywords:
+
+        normalized_keyword = (
+            normalize_for_matching(
+                keyword
+            )
+        )
+
+        if normalized_keyword in normalized:
+
+            found.append(
+                keyword
+            )
+
+    return list(
+        dict.fromkeys(found)
+    )
+
+
+# =========================================================
+# 10. NHẬN DIỆN SỐ TIỀN
+# =========================================================
+
+def detect_money_amount(text):
+
+    normalized = normalize_for_matching(
+        text
+    )
+
+    patterns = [
+
+        # 2 triệu / 10 triệu đồng / 1,5 triệu
+        r"\b\d+(?:[.,]\d+)?\s*"
+        r"(?:ty|trieu|nghin|ngan)"
+        r"(?:\s*dong)?\b",
+
+        # 20.000 đồng / 500,000 đồng
+        r"\b\d{1,3}(?:[.,]\d{3})+"
+        r"\s*(?:d|dong|vnd|vnd)\b",
+
+        # 50000 đồng
+        r"\b\d{4,}\s*"
+        r"(?:d|dong|vnd)\b",
+
+        # 100k / 20 nghìn
+        r"\b\d+\s*(?:k|nghin|ngan)\b"
+    ]
+
+    found = []
+
+    for pattern in patterns:
+
+        matches = re.findall(
+            pattern,
+            normalized
+        )
+
+        for match in matches:
+
+            if isinstance(
+                match,
+                tuple
+            ):
+
+                match = " ".join(
+                    match
+                )
+
+            found.append(
+                match
+            )
+
+    return list(
+        dict.fromkeys(
+            found
+        )
+    )
+
+
+# =========================================================
+# 11. TÍNH RISK SCORE
+# =========================================================
+#
+# QUAN TRỌNG:
+#
+# GEMINI KHÔNG QUYẾT ĐỊNH risk_score.
+#
+# Điểm cuối cùng luôn được tính ở đây.
+# =========================================================
+
+def calculate_risk_score(text):
+
+    normalized = normalize_for_matching(
+        text
+    )
+
+
+    # -----------------------------------------------------
+    # PHÁT HIỆN NHÓM
+    # -----------------------------------------------------
+
+    password = find_keywords(
+        text,
+        PASSWORD_KEYWORDS
+    )
+
+    otp = find_keywords(
+        text,
+        OTP_KEYWORDS
+    )
+
+    money_action = find_keywords(
+        text,
+        MONEY_ACTION_KEYWORDS
+    )
+
+    money_units = find_keywords(
+        text,
+        MONEY_UNIT_KEYWORDS
+    )
+
+    money_amounts = detect_money_amount(
+        text
+    )
+
+    links = find_keywords(
+        text,
+        LINK_KEYWORDS
+    )
+
+    urgency = find_keywords(
+        text,
+        URGENCY_KEYWORDS
+    )
+
+    threats = find_keywords(
+        text,
+        THREAT_KEYWORDS
+    )
+
+    impersonation = find_keywords(
+        text,
+        IMPERSONATION_KEYWORDS
+    )
+
+    personal_info = find_keywords(
+        text,
+        PERSONAL_INFO_KEYWORDS
+    )
+
+    rewards = find_keywords(
+        text,
+        REWARD_KEYWORDS
+    )
+
+    secrecy = find_keywords(
+        text,
+        SECRECY_KEYWORDS
+    )
+
+    actions = find_keywords(
+        text,
+        ACTION_KEYWORDS
+    )
+
+
+    # -----------------------------------------------------
+    # CÁC CỜ LOGIC
+    # -----------------------------------------------------
+
+    has_password = bool(
+        password
+    )
+
+    has_otp = bool(
+        otp
+    )
+
+    has_money_action = bool(
+        money_action
+    )
+
+    has_amount = bool(
+        money_amounts
+    )
+
+    has_strong_money_unit = any(
+        keyword in [
+            "tỷ",
+            "ty",
+            "triệu",
+            "trieu",
+            "nghìn",
+            "nghin",
+            "ngàn",
+            "ngan",
+            "vnđ",
+            "vnd"
+        ]
+        for keyword in money_units
+    )
+
+    has_money = (
+        has_money_action
+        or has_amount
+        or has_strong_money_unit
+    )
+
+    has_link = bool(
+        links
+    )
+
+    has_urgency = bool(
+        urgency
+    )
+
+    has_threat = bool(
+        threats
+    )
+
+    has_impersonation = bool(
+        impersonation
+    )
+
+    has_personal = bool(
+        personal_info
+    )
+
+    has_reward = bool(
+        rewards
+    )
+
+    has_secrecy = bool(
+        secrecy
+    )
+
+    has_action = bool(
+        actions
+    )
+
+
+    # -----------------------------------------------------
+    # ĐIỂM CƠ BẢN
+    # -----------------------------------------------------
+
+    score = 0
+
+    signals = []
+
+    matched = []
+
+
+    # -----------------------------------------------------
+    # PASSWORD
+    # -----------------------------------------------------
+
+    if has_password:
+
+        score += 45
+
+        signals.append(
+            "Có đề cập hoặc yêu cầu thông tin mật khẩu."
+        )
+
+        matched.append(
+            "🔑 Mật khẩu"
+        )
+
+
+    # -----------------------------------------------------
+    # OTP
+    # -----------------------------------------------------
+
+    if has_otp:
+
+        score += 45
+
+        signals.append(
+            "Có đề cập hoặc yêu cầu mã OTP/mã xác thực."
+        )
+
+        matched.append(
+            "🔐 OTP / mã xác thực"
+        )
+
+
+    # -----------------------------------------------------
+    # MONEY ACTION
+    # -----------------------------------------------------
+
+    if has_money_action:
+
+        score += 35
+
+        signals.append(
+            "Có yêu cầu chuyển, gửi, nộp hoặc thanh toán tiền."
+        )
+
+        matched.append(
+            "💰 Yêu cầu tiền"
+        )
+
+
+    # -----------------------------------------------------
+    # SỐ TIỀN
+    # -----------------------------------------------------
+
+    if has_amount:
+
+        score += 18
+
+        signals.append(
+            "Tin nhắn có đề cập một số tiền cụ thể."
+        )
+
+        matched.append(
+            "💵 Số tiền cụ thể"
+        )
+
+    elif has_strong_money_unit:
+
+        score += 12
+
+        signals.append(
+            "Tin nhắn có đề cập đơn vị tiền đáng chú ý."
+        )
+
+        matched.append(
+            "💵 Triệu / tỷ / nghìn"
+        )
+
+    elif (
+        "đồng" in normalized
+        or "dong" in normalized
+    ):
+
+        # "20.000 đồng tiền nước" chỉ được cộng nhẹ.
+        score += 3
+
+        matched.append(
+            "💵 Có đề cập đồng tiền"
+        )
+
+
+    # -----------------------------------------------------
+    # LINK
+    # -----------------------------------------------------
+
+    if has_link:
+
+        score += 15
+
+        signals.append(
+            "Có liên kết hoặc yêu cầu truy cập liên kết."
+        )
+
+        matched.append(
+            "🔗 Link"
+        )
+
+
+    # -----------------------------------------------------
+    # URGENCY
+    # -----------------------------------------------------
+
+    if has_urgency:
+
+        score += 18
+
+        signals.append(
+            "Có dấu hiệu tạo áp lực phải hành động nhanh."
+        )
+
+        matched.append(
+            "⏰ Khẩn cấp"
+        )
+
+
+    # -----------------------------------------------------
+    # THREAT
+    # -----------------------------------------------------
+
+    if has_threat:
+
+        score += 22
+
+        signals.append(
+            "Có ngôn ngữ đe dọa hoặc gây sợ hãi."
+        )
+
+        matched.append(
+            "⚠️ Đe dọa"
+        )
+
+
+    # -----------------------------------------------------
+    # IMPERSONATION
+    # -----------------------------------------------------
+
+    if has_impersonation:
+
+        score += 20
+
+        signals.append(
+            "Có dấu hiệu giả danh tổ chức hoặc người có thẩm quyền."
+        )
+
+        matched.append(
+            "👤 Giả danh"
+        )
+
+
+    # -----------------------------------------------------
+    # PERSONAL INFORMATION
+    # -----------------------------------------------------
+
+    if has_personal:
+
+        score += 18
+
+        signals.append(
+            "Có yêu cầu hoặc đề cập thông tin cá nhân."
+        )
+
+        matched.append(
+            "🪪 Thông tin cá nhân"
+        )
+
+
+    # -----------------------------------------------------
+    # REWARD
+    # -----------------------------------------------------
+
+    if has_reward:
+
+        score += 15
+
+        signals.append(
+            "Có yếu tố phần thưởng, quà tặng hoặc lợi ích."
+        )
+
+        matched.append(
+            "🎁 Phần thưởng"
+        )
+
+
+    # -----------------------------------------------------
+    # SECRECY
+    # -----------------------------------------------------
+
+    if has_secrecy:
+
+        score += 15
+
+        signals.append(
+            "Có dấu hiệu yêu cầu giữ bí mật."
+        )
+
+        matched.append(
+            "🤫 Giữ bí mật"
+        )
+
+
+    # -----------------------------------------------------
+    # ACTION
+    # -----------------------------------------------------
+
+    if has_action:
+
+        score += 8
+
+        signals.append(
+            "Tin nhắn thúc đẩy người nhận thực hiện hành động."
+        )
+
+
+    # =====================================================
+    # COMBO BONUS
+    # =====================================================
+
+    # -----------------------------------------------------
+    # OTP + MONEY
+    # -----------------------------------------------------
+
+    if (
+        has_otp
+        and has_money
+    ):
+
+        score += 25
+
+        signals.append(
+            "Kết hợp mã xác thực với yếu tố tiền bạc."
+        )
+
+
+    # -----------------------------------------------------
+    # PASSWORD + OTP
+    # -----------------------------------------------------
+
+    if (
+        has_password
+        and has_otp
+    ):
+
+        score += 25
+
+        signals.append(
+            "Kết hợp mật khẩu với mã xác thực."
+        )
+
+
+    # -----------------------------------------------------
+    # PASSWORD + LINK
+    # -----------------------------------------------------
+
+    if (
+        has_password
+        and has_link
+    ):
+
+        score += 20
+
+        signals.append(
+            "Kết hợp yêu cầu mật khẩu với liên kết."
+        )
+
+
+    # -----------------------------------------------------
+    # OTP + LINK
+    # -----------------------------------------------------
+
+    if (
+        has_otp
+        and has_link
+    ):
+
+        score += 18
+
+        signals.append(
+            "Kết hợp mã xác thực với liên kết."
+        )
+
+
+    # -----------------------------------------------------
+    # MONEY + THREAT
+    # -----------------------------------------------------
+
+    if (
+        has_money
+        and has_threat
+    ):
+
+        score += 20
+
+        signals.append(
+            "Kết hợp yêu cầu tiền với đe dọa."
+        )
+
+
+    # -----------------------------------------------------
+    # MONEY + URGENCY
+    # -----------------------------------------------------
+
+    if (
+        has_money
+        and has_urgency
+    ):
+
+        score += 18
+
+        signals.append(
+            "Kết hợp tiền với áp lực thời gian."
+        )
+
+
+    # -----------------------------------------------------
+    # MONEY + LINK + URGENCY
+    # -----------------------------------------------------
+
+    if (
+        has_money
+        and has_link
+        and has_urgency
+    ):
+
+        score += 15
+
+        signals.append(
+            "Kết hợp tiền, liên kết và áp lực thời gian."
+        )
+
+
+    # -----------------------------------------------------
+    # IMPERSONATION + OTP
+    # -----------------------------------------------------
+
+    if (
+        has_impersonation
+        and has_otp
+    ):
+
+        score += 20
+
+        signals.append(
+            "Giả danh kết hợp yêu cầu mã xác thực."
+        )
+
+
+    # -----------------------------------------------------
+    # IMPERSONATION + MONEY
+    # -----------------------------------------------------
+
+    if (
+        has_impersonation
+        and has_money
+    ):
+
+        score += 20
+
+        signals.append(
+            "Giả danh kết hợp yêu cầu tiền."
+        )
+
+
+    # -----------------------------------------------------
+    # REWARD + OTP / MONEY
+    # -----------------------------------------------------
+
+    if (
+        has_reward
+        and (
+            has_otp
+            or has_money
+        )
+    ):
+
+        score += 15
+
+        signals.append(
+            "Phần thưởng kết hợp với yêu cầu nhạy cảm."
+        )
+
+
+    # -----------------------------------------------------
+    # SECRECY + MONEY / OTP / PASSWORD
+    # -----------------------------------------------------
+
+    if (
+        has_secrecy
+        and (
+            has_money
+            or has_otp
+            or has_password
+        )
+    ):
+
+        score += 15
+
+        signals.append(
+            "Yêu cầu giữ bí mật kết hợp với thông tin/giao dịch nhạy cảm."
+        )
+
+
+    # =====================================================
+    # ĐIỂM SÀN
+    # =====================================================
+
+    # -----------------------------------------------------
+    # PASSWORD + OTP
+    # -----------------------------------------------------
+
+    if (
+        has_password
+        and has_otp
+    ):
+
+        score = max(
+            score,
+            85
+        )
+
+
+    # -----------------------------------------------------
+    # OTP + MONEY
+    # -----------------------------------------------------
+
+    if (
+        has_otp
+        and has_money
+    ):
+
+        score = max(
+            score,
+            85
+        )
+
+
+    # -----------------------------------------------------
+    # PASSWORD + LINK
+    # -----------------------------------------------------
+
+    if (
+        has_password
+        and has_link
+    ):
+
+        score = max(
+            score,
+            80
+        )
+
+
+    # -----------------------------------------------------
+    # OTP + LINK
+    # -----------------------------------------------------
+
+    if (
+        has_otp
+        and has_link
+    ):
+
+        score = max(
+            score,
+            75
+        )
+
+
+    # -----------------------------------------------------
+    # MONEY + THREAT
+    # -----------------------------------------------------
+
+    if (
+        has_money
+        and has_threat
+    ):
+
+        score = max(
+            score,
+            75
+        )
+
+
+    # -----------------------------------------------------
+    # MONEY + URGENCY + LINK
+    # -----------------------------------------------------
+
+    if (
+        has_money
+        and has_urgency
+        and has_link
+    ):
+
+        score = max(
+            score,
+            80
+        )
+
+
+    # -----------------------------------------------------
+    # OTP + MONEY + URGENCY
+    # -----------------------------------------------------
+
+    if (
+        has_otp
+        and has_money
+        and has_urgency
+    ):
+
+        score = max(
+            score,
+            90
+        )
+
+
+    # -----------------------------------------------------
+    # PASSWORD + OTP + MONEY
+    # -----------------------------------------------------
+
+    if (
+        has_password
+        and has_otp
+        and has_money
+    ):
+
+        score = max(
+            score,
+            95
+        )
+
+
+    # =====================================================
+    # GIỚI HẠN 0-100
+    # =====================================================
+
+    score = max(
+        0,
+        min(
+            100,
+            score
+        )
+    )
+
+
+    # =====================================================
+    # MỨC ĐỘ
+    # =====================================================
+
+    if score >= 85:
+
+        level = "Cực kỳ cao"
+
+    elif score >= 70:
+
+        level = "Rất cao"
+
+    elif score >= 50:
+
+        level = "Cao"
+
+    elif score >= 25:
+
+        level = "Cần chú ý"
+
+    else:
+
+        level = "Thấp"
+
+
+    # =====================================================
+    # FALLBACK SIGNAL
+    # =====================================================
+
+    if not signals:
+
+        signals.append(
+            "Chưa phát hiện dấu hiệu thao túng rõ ràng."
+        )
+
+
+    return {
+
+        "risk_score": score,
+
+        "risk_level": level,
+
+        "signals": list(
+            dict.fromkeys(
+                signals
+            )
+        ),
+
+        "matched": list(
+            dict.fromkeys(
+                matched
+            )
+        ),
+
+        "keywords": {
+
+            "password": password,
+
+            "otp": otp,
+
+            "money_action": money_action,
+
+            "money_units": money_units,
+
+            "money_amounts": money_amounts,
+
+            "links": links,
+
+            "urgency": urgency,
+
+            "threats": threats,
+
+            "impersonation": impersonation,
+
+            "personal_info": personal_info,
+
+            "rewards": rewards,
+
+            "secrecy": secrecy,
+
+            "actions": actions
+        }
+    }
+
+
+# =========================================================
+# 12. FALLBACK PHÂN TÍCH
+# =========================================================
+
+def fallback_analysis(message):
+
+    rule_result = calculate_risk_score(
+        message
+    )
+
+    score = rule_result[
+        "risk_score"
+    ]
+
+    level = rule_result[
+        "risk_level"
+    ]
+
+    signals = rule_result[
+        "signals"
+    ]
+
+
+    if score >= 85:
+
+        mechanism = (
+            "Tin nhắn kết hợp nhiều tín hiệu rủi ro mạnh "
+            "như thông tin xác thực, tiền bạc, liên kết, "
+            "đe dọa hoặc áp lực thời gian."
+        )
+
+        reasoning = (
+            "Điểm rủi ro được tính bởi bộ luật của ứng dụng "
+            "dựa trên các tín hiệu trực tiếp xuất hiện trong tin nhắn."
+        )
+
+
+    elif score >= 70:
+
+        mechanism = (
+            "Tin nhắn có một hoặc nhiều yếu tố có khả năng "
+            "khiến người nhận hành động trước khi kiểm tra."
+        )
+
+        reasoning = (
+            "Hệ thống phát hiện các tín hiệu rủi ro đáng kể "
+            "và tự động tăng điểm theo mức độ kết hợp."
+        )
+
+
+    elif score >= 50:
+
+        mechanism = (
+            "Tin nhắn có nhiều dấu hiệu cần cảnh giác "
+            "nhưng cần thêm ngữ cảnh để kết luận."
+        )
+
+        reasoning = (
+            "Kết quả dựa trên các từ khóa và mối liên hệ "
+            "giữa các nhóm dấu hiệu."
+        )
+
+
+    elif score >= 25:
+
+        mechanism = (
+            "Tin nhắn có một số tín hiệu cần được kiểm tra "
+            "trước khi thực hiện hành động."
+        )
+
+        reasoning = (
+            "Một số yếu tố đáng chú ý được phát hiện "
+            "nhưng chưa tạo thành tổ hợp rủi ro mạnh."
+        )
+
+
+    else:
+
+        mechanism = (
+            "Chưa phát hiện dấu hiệu thao túng rõ ràng "
+            "từ nội dung được cung cấp."
+        )
+
+        reasoning = (
+            "Tin nhắn hiện có ít tín hiệu thuộc các nhóm "
+            "rủi ro mà hệ thống đang kiểm tra."
+        )
+
+
+    actions = [
+
+        "Không cung cấp mật khẩu hoặc mã OTP.",
+
+        "Không chuyển tiền chỉ vì một tin nhắn yêu cầu.",
+
+        "Không bấm vào liên kết đáng ngờ.",
+
+        "Kiểm tra người gửi bằng một kênh độc lập.",
+
+        "Nếu không chắc chắn, hãy hỏi phụ huynh, "
+        "giáo viên hoặc người lớn đáng tin cậy."
+    ]
+
+
+    detected = []
+
+    if rule_result[
+        "keywords"
+    ]["password"]:
+
+        detected.append(
+            "Yêu cầu/đề cập mật khẩu"
+        )
+
+    if rule_result[
+        "keywords"
+    ]["otp"]:
+
+        detected.append(
+            "Yêu cầu/đề cập OTP"
+        )
+
+    if rule_result[
+        "keywords"
+    ]["money_action"]:
+
+        detected.append(
+            "Yêu cầu giao dịch tiền"
+        )
+
+    if rule_result[
+        "keywords"
+    ]["links"]:
+
+        detected.append(
+            "Liên kết đáng ngờ"
+        )
+
+    if rule_result[
+        "keywords"
+    ]["urgency"]:
+
+        detected.append(
+            "Tạo áp lực thời gian"
+        )
+
+    if rule_result[
+        "keywords"
+    ]["threats"]:
+
+        detected.append(
+            "Đe dọa/gây sợ hãi"
+        )
+
+    if rule_result[
+        "keywords"
+    ]["impersonation"]:
+
+        detected.append(
+            "Giả danh"
+        )
+
+    if rule_result[
+        "keywords"
+    ]["personal_info"]:
+
+        detected.append(
+            "Thông tin cá nhân"
+        )
+
+    if rule_result[
+        "keywords"
+    ]["rewards"]:
+
+        detected.append(
+            "Phần thưởng"
+        )
+
+    if rule_result[
+        "keywords"
+    ]["secrecy"]:
+
+        detected.append(
+            "Yêu cầu giữ bí mật"
+        )
+
+
+    if detected:
+
+        main_strategy = detected[0]
+
+    else:
+
+        main_strategy = (
+            "Chưa phát hiện rõ"
+        )
+
+
+    evidence = []
+
+    for item in rule_result[
+        "matched"
+    ]:
+
+        evidence.append(
+            f"Phát hiện nhóm tín hiệu: {item}"
+        )
+
+
+    if not evidence:
+
+        evidence.append(
+            "Không phát hiện nhóm tín hiệu nguy cơ rõ ràng."
+        )
+
+
+    return {
+
+        "risk_score": score,
+
+        "risk_level": level,
+
+        "main_strategy": main_strategy,
+
+        "detected_strategies": detected,
+
+        "manipulation_signals": signals,
+
+        "evidence": evidence,
+
+        "psychological_mechanism": mechanism,
+
+        "recommended_actions": actions,
+
+        "reasoning": reasoning
+    }
+
+
+# =========================================================
+# 13. SYSTEM PROMPT
+# =========================================================
+
+ANALYSIS_SYSTEM = """
+Bạn là chuyên gia giáo dục an toàn số cho học sinh THPT.
+
+Nhiệm vụ:
+
+Phân tích một tin nhắn và nhận diện các dấu hiệu:
+- thao túng tâm lý
+- lừa đảo
+- tạo áp lực
+- giả danh
+- yêu cầu thông tin nhạy cảm
+- yêu cầu tiền
+- yêu cầu OTP/mật khẩu
+- liên kết đáng ngờ
+
+QUAN TRỌNG:
+
+Điểm risk_score KHÔNG do bạn quyết định.
+
+Ứng dụng sẽ tự tính điểm bằng một bộ luật riêng.
+
+Bạn chỉ cung cấp:
+- giải thích
+- chiến thuật
+- bằng chứng
+- cơ chế tâm lý
+- khuyến nghị
+
+Không được tự bịa bằng chứng.
+
+Không được khẳng định người gửi chắc chắn là tội phạm
+nếu chỉ dựa trên một tin nhắn.
+
+Trả về JSON đúng cấu trúc:
+
+{
+    "risk_score": 0,
+    "risk_level": "",
+    "main_strategy": "",
+    "detected_strategies": [],
+    "manipulation_signals": [],
+    "evidence": [],
+    "psychological_mechanism": "",
+    "recommended_actions": [],
+    "reasoning": ""
+}
+
+Không Markdown.
+Không ```json.
+Không thêm văn bản bên ngoài JSON.
+"""
+
+
+# =========================================================
+# 14. PHÂN TÍCH BẰNG GEMINI + RULE ENGINE
 # =========================================================
 
 def analyze_message(message):
 
-    local_result = calculate_risk_score(message)
+    # -----------------------------------------------------
+    # RULE ENGINE TÍNH ĐIỂM TRƯỚC
+    # -----------------------------------------------------
 
-    fallback = fallback_analysis(
-        message,
-        local_result
+    rule_result = calculate_risk_score(
+        message
     )
+
+    rule_score = rule_result[
+        "risk_score"
+    ]
+
+    rule_level = rule_result[
+        "risk_level"
+    ]
+
+
+    # -----------------------------------------------------
+    # NẾU KHÔNG CÓ API KEY
+    # -----------------------------------------------------
 
     if not API_KEY:
 
-        st.session_state.last_gemini_status = "NO_KEY"
-        st.session_state.last_gemini_error = (
-            "Chưa cấu hình GEMINI_API_KEY."
+        return (
+            fallback_analysis(
+                message
+            ),
+            "fallback"
         )
 
-        return fallback, "fallback"
 
-    result = call_gemini(message)
+    prompt = f"""
+Hãy phân tích tin nhắn dưới đây.
 
-    st.session_state.last_gemini_status = result.get("status")
-    st.session_state.last_gemini_error = result.get("error")
+Tin nhắn:
 
-    if result.get("success"):
+--- BẮT ĐẦU ---
+{message}
+--- KẾT THÚC ---
 
-        ai_data = result.get("data") or {}
+Lưu ý:
+Điểm rủi ro của hệ thống sẽ được tính riêng.
+Bạn chỉ cần cung cấp phần giải thích và nhận diện thủ đoạn.
 
-        main_strategy = safe_text(
-            ai_data.get("main_strategy")
+Trả về JSON.
+"""
+
+
+    response = call_gemini(
+        prompt,
+        ANALYSIS_SYSTEM,
+        json_mode=True
+    )
+
+
+    # -----------------------------------------------------
+    # GEMINI THÀNH CÔNG
+    # -----------------------------------------------------
+
+    if response[
+        "success"
+    ]:
+
+        gemini_result = extract_json(
+            response["text"]
         )
 
-        detected_strategies = ai_data.get(
-            "detected_strategies"
-        )
 
-        manipulation_signals = ai_data.get(
-            "manipulation_signals"
-        )
+        if isinstance(
+            gemini_result,
+            dict
+        ):
 
-        evidence = ai_data.get("evidence")
+            # =============================================
+            # CỰC KỲ QUAN TRỌNG
+            #
+            # BỎ QUA risk_score GEMINI TRẢ VỀ.
+            #
+            # LẤY ĐIỂM TỪ RULE ENGINE.
+            # =============================================
 
-        psychological_mechanism = safe_text(
-            ai_data.get("psychological_mechanism")
-        )
+            final_result = {
 
-        recommended_actions = ai_data.get(
-            "recommended_actions"
-        )
+                "risk_score":
+                    rule_score,
 
-        reasoning = safe_text(
-            ai_data.get("reasoning")
-        )
+                "risk_level":
+                    rule_level,
 
-        if not isinstance(detected_strategies, list):
-            detected_strategies = []
+                "main_strategy":
+                    gemini_result.get(
+                        "main_strategy",
+                        "Không xác định"
+                    ),
 
-        if not isinstance(manipulation_signals, list):
-            manipulation_signals = []
+                "detected_strategies":
+                    gemini_result.get(
+                        "detected_strategies",
+                        []
+                    ),
 
-        if not isinstance(evidence, list):
-            evidence = []
+                "manipulation_signals":
+                    gemini_result.get(
+                        "manipulation_signals",
+                        rule_result["signals"]
+                    ),
 
-        if not isinstance(recommended_actions, list):
-            recommended_actions = []
+                "evidence":
+                    gemini_result.get(
+                        "evidence",
+                        []
+                    ),
 
-        if not main_strategy:
-            main_strategy = fallback["main_strategy"]
+                "psychological_mechanism":
+                    gemini_result.get(
+                        "psychological_mechanism",
+                        ""
+                    ),
 
-        if not detected_strategies:
-            detected_strategies = fallback["detected_strategies"]
+                "recommended_actions":
+                    gemini_result.get(
+                        "recommended_actions",
+                        []
+                    ),
 
-        if not manipulation_signals:
-            manipulation_signals = fallback["manipulation_signals"]
+                "reasoning":
+                    gemini_result.get(
+                        "reasoning",
+                        ""
+                    )
+            }
 
-        if not evidence:
-            evidence = fallback["evidence"]
 
-        if not psychological_mechanism:
-            psychological_mechanism = (
-                fallback["psychological_mechanism"]
+            # -------------------------------------------------
+            # Nếu Gemini không trả một số phần,
+            # lấy fallback tương ứng.
+            # -------------------------------------------------
+
+            fallback = fallback_analysis(
+                message
             )
 
-        if not recommended_actions:
-            recommended_actions = (
-                fallback["recommended_actions"]
+
+            if not final_result[
+                "manipulation_signals"
+            ]:
+
+                final_result[
+                    "manipulation_signals"
+                ] = fallback[
+                    "manipulation_signals"
+                ]
+
+
+            if not final_result[
+                "evidence"
+            ]:
+
+                final_result[
+                    "evidence"
+                ] = fallback[
+                    "evidence"
+                ]
+
+
+            if not final_result[
+                "recommended_actions"
+            ]:
+
+                final_result[
+                    "recommended_actions"
+                ] = fallback[
+                    "recommended_actions"
+                ]
+
+
+            if not final_result[
+                "psychological_mechanism"
+            ]:
+
+                final_result[
+                    "psychological_mechanism"
+                ] = fallback[
+                    "psychological_mechanism"
+                ]
+
+
+            if not final_result[
+                "reasoning"
+            ]:
+
+                final_result[
+                    "reasoning"
+                ] = fallback[
+                    "reasoning"
+                ]
+
+
+            return (
+                final_result,
+                "gemini"
             )
 
-        if not reasoning:
-            reasoning = fallback["reasoning"]
 
-        final_result = {
-            "risk_score": local_result["risk_score"],
-            "risk_level": local_result["risk_level"],
-            "main_strategy": main_strategy,
-            "detected_strategies": detected_strategies,
-            "manipulation_signals": manipulation_signals,
-            "evidence": evidence,
-            "psychological_mechanism": psychological_mechanism,
-            "recommended_actions": recommended_actions,
-            "reasoning": reasoning,
-        }
+    # -----------------------------------------------------
+    # GEMINI LỖI
+    # -----------------------------------------------------
 
-        return final_result, "gemini"
-
-    return fallback, "fallback"
+    return (
+        fallback_analysis(
+            message
+        ),
+        "fallback"
+    )
 
 
 # =========================================================
-# 13. GAME DATA
+# 15. NGÂN HÀNG 30 TÌNH HUỐNG
+# =========================================================
+#
+# GEMINI KHÔNG TẠO GAME.
+#
+# Mỗi tình huống có ID riêng.
+#
+# Hệ thống sẽ đi hết 30 tình huống
+# trước khi bắt đầu vòng mới.
 # =========================================================
 
-SCENARIOS = [
+FALLBACK_SCENARIOS = [
 
     {
-        "question": (
-            "Bạn nhận được tin nhắn: "
-            "\"Bạn đã trúng thưởng. Hãy bấm vào link và đăng nhập "
-            "để nhận quà trong 10 phút.\" Bạn nên làm gì?"
+        "id": 1,
+        "category": "OTP / Phần thưởng",
+        "message": (
+            "Chúc mừng! Bạn đã trúng phần thưởng 20 triệu đồng. "
+            "Hãy gửi mã OTP trong 5 phút để xác nhận nhận thưởng."
         ),
-        "answer": "Không bấm link và kiểm tra thông tin bằng kênh chính thức.",
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Gửi OTP ngay để nhận tiền.",
+            "Hỏi người gửi rồi gửi OTP.",
+            "Không gửi OTP và kiểm tra thông tin bằng kênh chính thức.",
+            "Chuyển trước một khoản phí nhỏ."
+        ],
+        "correct_index": 2,
         "explanation": (
-            "Tin nhắn sử dụng phần thưởng và giới hạn thời gian "
-            "để tạo áp lực. Không nên đăng nhập qua liên kết lạ."
+            "OTP là thông tin xác thực nhạy cảm. "
+            "Không nên cung cấp OTP cho người khác chỉ vì "
+            "một tin nhắn thông báo phần thưởng."
         )
     },
 
     {
-        "question": (
-            "Một người tự xưng là nhân viên ngân hàng yêu cầu "
-            "bạn đọc mã OTP để xác minh tài khoản. Bạn nên làm gì?"
+        "id": 2,
+        "category": "Ngân hàng / Link",
+        "message": (
+            "Ngân hàng thông báo tài khoản của bạn sắp bị khóa. "
+            "Hãy bấm vào đường link bên dưới và đăng nhập để xác minh."
         ),
-        "answer": "Không cung cấp mã OTP.",
+        "question": "Cách xử lý an toàn nhất là gì?",
+        "options": [
+            "Bấm link ngay.",
+            "Đăng nhập theo link.",
+            "Tự mở ứng dụng hoặc website chính thức để kiểm tra.",
+            "Gửi mật khẩu cho nhân viên."
+        ],
+        "correct_index": 2,
         "explanation": (
-            "Mã OTP là thông tin xác thực quan trọng. "
-            "Không nên đọc mã cho người khác qua tin nhắn hoặc cuộc gọi."
+            "Không nên đăng nhập thông qua một đường link "
+            "đáng ngờ được gửi bất ngờ. Hãy tự mở kênh chính thức."
         )
     },
 
     {
-        "question": (
-            "Một tài khoản lạ nhắn rằng tài khoản của bạn sắp bị khóa "
-            "và yêu cầu đăng nhập vào một đường link. Điều gì đáng ngờ?"
+        "id": 3,
+        "category": "Việc làm online",
+        "message": (
+            "Một người lạ giới thiệu việc làm online với thu nhập "
+            "3 triệu đồng mỗi ngày nhưng yêu cầu bạn chuyển trước "
+            "200.000 đồng để kích hoạt tài khoản."
         ),
-        "answer": "Dấu hiệu tạo khẩn cấp và dẫn người dùng đến liên kết.",
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Chuyển tiền để bắt đầu.",
+            "Chuyển một nửa số tiền.",
+            "Không chuyển tiền khi chưa xác minh.",
+            "Mượn tiền bạn bè để tham gia."
+        ],
+        "correct_index": 2,
         "explanation": (
-            "Kẻ lừa đảo thường tạo cảm giác gấp để người nhận "
-            "không có thời gian kiểm tra."
+            "Yêu cầu trả tiền trước để nhận việc là dấu hiệu cần "
+            "được kiểm tra kỹ. Không nên chuyển tiền chỉ dựa trên lời hứa."
         )
     },
 
     {
-        "question": (
-            "Một người trên mạng nói rằng bạn được nhận quà miễn phí "
-            "nhưng phải gửi thông tin cá nhân trước. Bạn nên làm gì?"
+        "id": 4,
+        "category": "Giả danh giáo viên",
+        "message": (
+            "Cô giáo nhắn: 'Em chuyển ngay 500.000 đồng vào tài khoản "
+            "này để nhà trường hoàn tất hồ sơ. Cô đang bận nên không gọi được.'"
         ),
-        "answer": "Không gửi thông tin cá nhân khi chưa xác minh.",
+        "question": "Bạn nên phản ứng thế nào?",
+        "options": [
+            "Chuyển ngay.",
+            "Gửi một nửa trước.",
+            "Liên hệ cô giáo hoặc nhà trường qua kênh chính thức.",
+            "Hỏi bạn cùng lớp rồi chuyển."
+        ],
+        "correct_index": 2,
         "explanation": (
-            "Quà tặng có thể được sử dụng làm mồi để thu thập "
-            "thông tin cá nhân."
+            "Người gửi có thể bị giả mạo. Khi có yêu cầu tiền bất thường, "
+            "hãy xác minh bằng kênh khác."
         )
     },
 
     {
-        "question": (
-            "Bạn nhận được tin nhắn yêu cầu chuyển tiền ngay "
-            "và nói rằng không được kể cho người khác. Đây là dấu hiệu gì?"
+        "id": 5,
+        "category": "Giả danh người thân",
+        "message": (
+            "Một tài khoản nhắn: 'Mẹ đang bận nên không nghe máy được. "
+            "Con chuyển gấp 2 triệu đồng vào số tài khoản này giúp mẹ nhé.'"
         ),
-        "answer": "Tạo áp lực và yêu cầu giữ bí mật.",
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Chuyển ngay vì người gửi nói là mẹ.",
+            "Gọi trực tiếp cho mẹ để xác minh.",
+            "Gửi mật khẩu để chứng minh danh tính.",
+            "Nhờ người lạ kiểm tra."
+        ],
+        "correct_index": 1,
         "explanation": (
-            "Yêu cầu chuyển tiền kèm việc giữ bí mật là dấu hiệu "
-            "cần đặc biệt thận trọng."
+            "Tài khoản có thể bị giả mạo. Hãy gọi trực tiếp cho người thân "
+            "bằng số điện thoại quen thuộc để xác minh."
         )
     },
 
     {
-        "question": (
-            "Một người tự xưng là giáo viên yêu cầu bạn gửi mật khẩu "
-            "tài khoản học tập qua tin nhắn. Bạn nên làm gì?"
+        "id": 6,
+        "category": "Shipper / Thanh toán",
+        "message": (
+            "Shipper nhắn rằng đơn hàng đang bị giữ và yêu cầu bạn "
+            "thanh toán 35.000 đồng qua một đường link lạ."
         ),
-        "answer": "Không gửi mật khẩu và xác minh với giáo viên bằng kênh khác.",
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Bấm link và thanh toán.",
+            "Gửi thông tin thẻ.",
+            "Kiểm tra đơn hàng trong ứng dụng chính thức.",
+            "Chuyển 35.000 đồng ngay."
+        ],
+        "correct_index": 2,
         "explanation": (
-            "Không nên gửi mật khẩu qua tin nhắn, kể cả khi người gửi "
-            "tự xưng là người quen."
+            "Không nên thanh toán qua link lạ. Hãy kiểm tra trạng thái "
+            "đơn hàng trên ứng dụng hoặc website chính thức."
         )
     },
 
     {
-        "question": (
-            "Một đường link lạ yêu cầu bạn nhập CCCD, số điện thoại "
-            "và thông tin tài khoản để nhận phần thưởng. Bạn nên làm gì?"
+        "id": 7,
+        "category": "Mạng xã hội",
+        "message": (
+            "Tài khoản mạng xã hội của bạn sẽ bị khóa trong 10 phút. "
+            "Hãy đăng nhập vào link này để xác minh ngay."
         ),
-        "answer": "Không nhập thông tin và kiểm tra nguồn của chương trình.",
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Đăng nhập ngay.",
+            "Gửi mật khẩu cho người gửi.",
+            "Tự mở ứng dụng chính thức và kiểm tra.",
+            "Chuyển tiền để mở khóa."
+        ],
+        "correct_index": 2,
         "explanation": (
-            "Nhiều thông tin cá nhân cùng với phần thưởng và link lạ "
+            "Thông báo tạo áp lực thời gian kèm link đăng nhập là dấu hiệu "
+            "cần cảnh giác."
+        )
+    },
+
+    {
+        "id": 8,
+        "category": "Học bổng",
+        "message": (
+            "Bạn được chọn nhận học bổng 15 triệu đồng. "
+            "Vui lòng gửi CCCD, số tài khoản và ảnh cá nhân "
+            "cho người gửi để hoàn tất thủ tục."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Gửi toàn bộ thông tin.",
+            "Gửi CCCD trước.",
+            "Xác minh chương trình học bổng qua nhà trường.",
+            "Gửi ảnh nhưng không gửi tên."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Thông tin cá nhân cần được bảo vệ. Hãy xác minh chương trình "
+            "thông qua nhà trường hoặc nguồn chính thức."
+        )
+    },
+
+    {
+        "id": 9,
+        "category": "Mật khẩu",
+        "message": (
+            "Bộ phận kỹ thuật yêu cầu bạn gửi mật khẩu hiện tại "
+            "để họ kiểm tra tài khoản."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Gửi mật khẩu.",
+            "Gửi một phần mật khẩu.",
+            "Không gửi mật khẩu.",
+            "Gửi mật khẩu sau khi đăng xuất."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Mật khẩu là thông tin bí mật. Không nên gửi mật khẩu "
+            "cho người khác qua tin nhắn."
+        )
+    },
+
+    {
+        "id": 10,
+        "category": "OTP ngân hàng",
+        "message": (
+            "Hệ thống phát hiện giao dịch bất thường. "
+            "Nhân viên yêu cầu bạn đọc mã OTP để hủy giao dịch."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Đọc OTP.",
+            "Gửi ảnh màn hình OTP.",
+            "Không cung cấp OTP và tự liên hệ ngân hàng.",
+            "Gửi số tài khoản trước."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Không cung cấp OTP cho người khác. Hãy tự liên hệ "
+            "ngân hàng bằng kênh chính thức."
+        )
+    },
+
+    {
+        "id": 11,
+        "category": "Giả danh công an",
+        "message": (
+            "Một người tự nhận là công an nói rằng tài khoản của bạn "
+            "liên quan đến vụ việc và yêu cầu chuyển tiền để xác minh."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Chuyển tiền ngay.",
+            "Gửi OTP.",
+            "Không chuyển tiền và trao đổi với người lớn đáng tin cậy.",
+            "Gửi mật khẩu để xác minh."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Yêu cầu tiền qua một cuộc trò chuyện bất ngờ cần được xác minh. "
+            "Không nên chuyển tiền chỉ vì người gửi tự nhận là cơ quan chức năng."
+        )
+    },
+
+    {
+        "id": 12,
+        "category": "Voucher",
+        "message": (
+            "Bạn nhận được voucher trị giá 5 triệu đồng. "
+            "Nhấn vào link và nhập thông tin tài khoản để nhận."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Nhấn link ngay.",
+            "Nhập thông tin rồi kiểm tra sau.",
+            "Kiểm tra chương trình trên website chính thức.",
+            "Gửi mật khẩu cho người gửi."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Phần thưởng bất ngờ kèm yêu cầu nhập thông tin nhạy cảm "
             "là dấu hiệu cần cảnh giác."
         )
     },
 
     {
-        "question": (
-            "Một người nhắn rằng nếu bạn không chuyển tiền trong 5 phút "
-            "thì sẽ bị phạt. Bạn nên làm gì?"
+        "id": 13,
+        "category": "Bạn bè",
+        "message": (
+            "Một người bạn nhắn rằng tài khoản đang lỗi và nhờ bạn "
+            "chuyển giúp 300.000 đồng ngay, hứa sẽ trả sau."
         ),
-        "answer": "Không chuyển tiền vội; xác minh thông tin trước.",
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Chuyển ngay.",
+            "Chuyển 100.000 đồng trước.",
+            "Gọi hoặc gặp trực tiếp bạn để xác minh.",
+            "Đăng thông tin tài khoản lên nhóm lớp."
+        ],
+        "correct_index": 2,
         "explanation": (
-            "Đây là cách tạo sợ hãi và khẩn cấp để thúc đẩy hành động."
+            "Tài khoản của bạn bè có thể bị chiếm quyền. "
+            "Hãy xác minh bằng một kênh khác."
         )
     },
 
+    {
+        "id": 14,
+        "category": "Facebook",
+        "message": (
+            "Tài khoản Facebook của bạn vi phạm chính sách. "
+            "Hãy nhập mật khẩu tại link này trong 15 phút để tránh bị khóa."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Nhập mật khẩu.",
+            "Gửi mật khẩu cho admin.",
+            "Tự mở Facebook để kiểm tra thông báo.",
+            "Chuyển tiền để mở khóa."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Không nên nhập mật khẩu qua link được gửi bất ngờ. "
+            "Hãy tự mở nền tảng chính thức."
+        )
+    },
+
+    {
+        "id": 15,
+        "category": "Đầu tư",
+        "message": (
+            "Bạn chỉ cần đầu tư 1 triệu đồng hôm nay và sẽ nhận "
+            "10 triệu đồng trong tuần tới. Cơ hội chỉ còn vài suất."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Đầu tư ngay.",
+            "Mượn tiền để đầu tư.",
+            "Không chuyển tiền chỉ dựa trên lời hứa lợi nhuận.",
+            "Gửi thông tin ngân hàng."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Lời hứa lợi nhuận cao kèm áp lực thời gian cần được kiểm tra "
+            "độc lập trước khi thực hiện giao dịch."
+        )
+    },
+
+    {
+        "id": 16,
+        "category": "Mã QR",
+        "message": (
+            "Bạn được hoàn tiền 2 triệu đồng. "
+            "Hãy quét mã QR và đăng nhập ngân hàng để nhận tiền."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Quét QR ngay.",
+            "Đăng nhập ngân hàng theo hướng dẫn.",
+            "Kiểm tra chương trình hoàn tiền qua kênh chính thức.",
+            "Gửi OTP sau khi quét."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Không nên đăng nhập tài khoản tài chính qua QR hoặc link "
+            "không rõ nguồn gốc."
+        )
+    },
+
+    {
+        "id": 17,
+        "category": "Tài khoản game",
+        "message": (
+            "Bạn được tặng 5.000 kim cương miễn phí. "
+            "Hãy nhập mật khẩu tài khoản game để nhận quà."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Nhập mật khẩu.",
+            "Gửi mật khẩu cho admin.",
+            "Không cung cấp mật khẩu và kiểm tra trong game chính thức.",
+            "Đổi mật khẩu rồi gửi mật khẩu mới."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Mật khẩu không nên được cung cấp cho người khác "
+            "để nhận phần thưởng."
+        )
+    },
+
+    {
+        "id": 18,
+        "category": "Giả danh giáo viên",
+        "message": (
+            "Thầy nhắn rằng đang họp nên không nghe điện thoại được "
+            "và yêu cầu em gửi ngay 1 triệu đồng để đóng phí cho lớp."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Chuyển ngay.",
+            "Hỏi một người lạ xác nhận.",
+            "Liên hệ thầy hoặc nhà trường bằng kênh chính thức.",
+            "Gửi OTP để xác minh."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Việc người gửi viện lý do không thể nghe máy và yêu cầu tiền "
+            "là lý do để xác minh trước khi giao dịch."
+        )
+    },
+
+    {
+        "id": 19,
+        "category": "Quà tặng",
+        "message": (
+            "Bạn có một phần quà trị giá 10 triệu đồng. "
+            "Hãy gửi phí vận chuyển 100.000 đồng trước để nhận."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Gửi phí ngay.",
+            "Gửi một nửa phí.",
+            "Kiểm tra nguồn chương trình và không chuyển tiền vội.",
+            "Gửi OTP để xác nhận."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Phần thưởng lớn đi kèm yêu cầu đóng phí trước "
+            "là tình huống cần được xác minh kỹ."
+        )
+    },
+
+    {
+        "id": 20,
+        "category": "Ngân hàng",
+        "message": (
+            "Nhân viên ngân hàng yêu cầu số tài khoản, mật khẩu "
+            "và OTP để xác minh danh tính ngay trong cuộc trò chuyện."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Gửi tất cả thông tin.",
+            "Chỉ gửi OTP.",
+            "Không cung cấp mật khẩu hoặc OTP.",
+            "Gửi ảnh thẻ ngân hàng."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Mật khẩu và OTP là thông tin xác thực nhạy cảm. "
+            "Không nên cung cấp cho người khác qua tin nhắn."
+        )
+    },
+
+    {
+        "id": 21,
+        "category": "Việc làm",
+        "message": (
+            "Muốn nhận mức lương 20 triệu mỗi tháng, "
+            "bạn cần đóng phí kích hoạt hồ sơ 500.000 đồng hôm nay."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Đóng phí ngay.",
+            "Mượn tiền đóng phí.",
+            "Kiểm tra công ty và thông tin tuyển dụng độc lập.",
+            "Gửi CCCD trước."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Không nên chuyển tiền chỉ để được nhận một công việc "
+            "khi chưa xác minh nguồn tuyển dụng."
+        )
+    },
+
+    {
+        "id": 22,
+        "category": "Cảnh báo giả",
+        "message": (
+            "Thiết bị của bạn phát hiện hoạt động đáng ngờ. "
+            "Bấm link ngay nếu không tài khoản sẽ bị khóa."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Bấm link ngay.",
+            "Nhập mật khẩu.",
+            "Tự mở ứng dụng chính thức để kiểm tra.",
+            "Gửi OTP."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Tin nhắn kết hợp cảnh báo, đe dọa và link cần được "
+            "kiểm tra qua nguồn chính thức."
+        )
+    },
+
+    {
+        "id": 23,
+        "category": "Giữ bí mật",
+        "message": (
+            "Một người tự nhận là người quen nói đang gặp chuyện gấp. "
+            "Họ yêu cầu bạn chuyển 700.000 đồng và đừng nói với ai."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Chuyển ngay và giữ bí mật.",
+            "Chuyển một phần.",
+            "Xác minh người đó và nói với người lớn đáng tin cậy.",
+            "Gửi mật khẩu để xác minh."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Yêu cầu tiền kết hợp với yêu cầu giữ bí mật là dấu hiệu "
+            "cần đặc biệt cảnh giác."
+        )
+    },
+
+    {
+        "id": 24,
+        "category": "Mạng xã hội",
+        "message": (
+            "Bạn được chọn làm người thử nghiệm tính năng mới. "
+            "Hãy gửi số điện thoại và mã xác thực để tham gia."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Gửi mã xác thực.",
+            "Gửi ảnh màn hình.",
+            "Kiểm tra chương trình trên kênh chính thức.",
+            "Gửi mật khẩu."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Mã xác thực không nên được chia sẻ cho người khác. "
+            "Hãy kiểm tra chương trình trên nguồn chính thức."
+        )
+    },
+
+    {
+        "id": 25,
+        "category": "Tình huống bình thường",
+        "message": (
+            "Chiều nay nhớ mang 20.000 đồng tiền nước của lớp nhé."
+        ),
+        "question": "Bạn nên xử lý thế nào?",
+        "options": [
+            "Coi đây chắc chắn là lừa đảo.",
+            "Kiểm tra với lớp nếu thấy bất thường.",
+            "Gửi OTP để xác nhận.",
+            "Bấm vào một link lạ."
+        ],
+        "correct_index": 1,
+        "explanation": (
+            "Việc đề cập đến tiền không tự động có nghĩa là lừa đảo. "
+            "Trong tình huống bình thường, có thể xác nhận lại với lớp "
+            "nếu cần."
+        )
+    },
+
+    {
+        "id": 26,
+        "category": "Tình huống bình thường",
+        "message": (
+            "Nhà trường thông báo lịch kiểm tra học kỳ sẽ được "
+            "cập nhật trên hệ thống chính thức vào ngày mai."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Tìm một link lạ để xem trước.",
+            "Kiểm tra hệ thống chính thức của trường.",
+            "Gửi mật khẩu cho giáo viên.",
+            "Chuyển tiền để xem lịch."
+        ],
+        "correct_index": 1,
+        "explanation": (
+            "Đối với thông báo học tập, hãy sử dụng hệ thống "
+            "chính thức của nhà trường."
+        )
+    },
+
+    {
+        "id": 27,
+        "category": "Tình huống bình thường",
+        "message": (
+            "Đơn hàng của bạn sẽ được giao vào ngày mai. "
+            "Vui lòng chuẩn bị tiền khi nhận hàng."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Bấm vào link lạ.",
+            "Kiểm tra đơn hàng trong ứng dụng mua hàng.",
+            "Gửi OTP cho shipper.",
+            "Gửi mật khẩu tài khoản."
+        ],
+        "correct_index": 1,
+        "explanation": (
+            "Việc thanh toán khi nhận hàng có thể là hoạt động bình thường. "
+            "Bạn nên kiểm tra đơn hàng trên ứng dụng chính thức."
+        )
+    },
+
+    {
+        "id": 28,
+        "category": "Tình huống bình thường",
+        "message": (
+            "Nhà trường sẽ công bố danh sách học sinh nhận học bổng "
+            "trên bảng tin chính thức."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Gửi CCCD cho một tài khoản lạ.",
+            "Theo dõi thông báo chính thức của trường.",
+            "Chuyển phí để được xem danh sách.",
+            "Gửi OTP."
+        ],
+        "correct_index": 1,
+        "explanation": (
+            "Thông tin học bổng nên được kiểm tra trên nguồn chính thức "
+            "của nhà trường."
+        )
+    },
+
+    {
+        "id": 29,
+        "category": "Tình huống bình thường",
+        "message": (
+            "Cuộc thi của trường sẽ diễn ra vào thứ sáu. "
+            "Các đội nhớ kiểm tra email trường để nhận lịch thi."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Gửi mật khẩu email cho người tổ chức.",
+            "Kiểm tra email trường.",
+            "Chuyển tiền để nhận lịch.",
+            "Bấm vào link không rõ nguồn."
+        ],
+        "correct_index": 1,
+        "explanation": (
+            "Đây là yêu cầu thông thường. Hãy sử dụng email "
+            "hoặc hệ thống chính thức của trường."
+        )
+    },
+
+    {
+        "id": 30,
+        "category": "An toàn tài khoản",
+        "message": (
+            "Nếu nhận được tin nhắn yêu cầu cung cấp OTP hoặc mật khẩu, "
+            "hãy dừng lại và xác minh người gửi bằng một kênh khác."
+        ),
+        "question": "Bạn nên làm gì?",
+        "options": [
+            "Gửi OTP để xác minh.",
+            "Gửi mật khẩu nếu người gửi tự nhận là nhân viên.",
+            "Dừng lại và xác minh bằng kênh độc lập.",
+            "Chuyển tiền để bảo vệ tài khoản."
+        ],
+        "correct_index": 2,
+        "explanation": (
+            "Không chia sẻ OTP hoặc mật khẩu. Khi có yêu cầu bất thường, "
+            "hãy dừng lại và xác minh bằng kênh độc lập."
+        )
+    }
 ]
 
 
 # =========================================================
-# 14. CHỌN CÂU HỎI GAME
+# 16. LẤY TÌNH HUỐNG KHÔNG LẶP
 # =========================================================
 
-def get_new_scenario():
+def get_next_scenario():
+
+    total = len(
+        FALLBACK_SCENARIOS
+    )
+
+    used = st.session_state.used_scenario_ids
+
+
+    # -----------------------------------------------------
+    # Nếu đã chơi hết toàn bộ 30 tình huống
+    # -----------------------------------------------------
+
+    if len(used) >= total:
+
+        st.session_state.used_scenario_ids = []
+
+        used = []
+
+        st.toast(
+            "🎉 Bạn đã hoàn thành một vòng 30 tình huống! "
+            "Bắt đầu vòng mới.",
+            icon="🛡️"
+        )
+
+
+    # -----------------------------------------------------
+    # Lấy các tình huống chưa chơi
+    # -----------------------------------------------------
 
     available = [
-        item
-        for index, item in enumerate(SCENARIOS)
-        if index not in st.session_state.used_scenarios
+        scenario
+        for scenario in FALLBACK_SCENARIOS
+        if scenario["id"] not in used
     ]
+
+
+    # -----------------------------------------------------
+    # Phòng trường hợp bất thường
+    # -----------------------------------------------------
 
     if not available:
 
-        st.session_state.used_scenarios = []
+        st.session_state.used_scenario_ids = []
 
-        available = SCENARIOS.copy()
+        available = (
+            FALLBACK_SCENARIOS.copy()
+        )
 
-    scenario = random.choice(available)
 
-    index = SCENARIOS.index(scenario)
+    # -----------------------------------------------------
+    # Chọn random từ phần chưa dùng
+    # -----------------------------------------------------
 
-    st.session_state.used_scenarios.append(index)
+    scenario = random.choice(
+        available
+    )
 
-    st.session_state.game_question = scenario
-    st.session_state.game_result = None
 
-    # Không gán st.session_state.game_answer ở đây.
-    # Radio widget sẽ dùng key riêng theo từng vòng,
-    # tránh StreamlitWidgetAlreadyInstantiatedError.
+    # -----------------------------------------------------
+    # Ghi nhận ID
+    # -----------------------------------------------------
+
+    st.session_state.used_scenario_ids.append(
+        scenario["id"]
+    )
+
+
+    # -----------------------------------------------------
+    # Tăng round
+    # -----------------------------------------------------
+
     st.session_state.game_round += 1
 
 
-# =========================================================
-# 15. GIAO DIỆN TAB
-# =========================================================
+    # -----------------------------------------------------
+    # Lưu tình huống
+    # -----------------------------------------------------
 
-tab1, tab2, tab3 = st.tabs(
-    [
-        "🔎 Phân tích tin nhắn",
-        "🎮 Thử thách",
-        "ℹ️ Hướng dẫn"
-    ]
-)
+    st.session_state.game_question = (
+        scenario
+    )
+
+    st.session_state.game_result = None
 
 
+    # -----------------------------------------------------
+    # Reset answer
+    # -----------------------------------------------------
+
+    st.session_state.game_answer = None
+
+
+    return scenario
+
+
 # =========================================================
-# TAB 1 - PHÂN TÍCH
+# 17. HIỂN THỊ RISK SCORE
+# =========================================================
+
+def display_risk_score(
+    score,
+    level
+):
+
+    if score >= 70:
+
+        box_class = "danger-box"
+
+    elif score >= 25:
+
+        box_class = "warning-box"
+
+    else:
+
+        box_class = "safe-box"
+
+
+    st.markdown(
+        f"""
+        <div class="{box_class}">
+
+            <div style="
+                text-align:center;
+                font-size:52px;
+                font-weight:800;
+            ">
+                {score}/100
+            </div>
+
+            <div style="
+                text-align:center;
+                font-size:24px;
+                font-weight:700;
+            ">
+                {level}
+            </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# =========================================================
+# 18. TAB
+# =========================================================
+
+tab1, tab2, tab3 = st.tabs([
+    "🔍 QUÉT TIN NHẮN",
+    "🎮 TÌNH HUỐNG GIẢ LẬP",
+    "📚 KIẾN THỨC TỰ VỆ"
+])
+
+
+# =========================================================
+# TAB 1 - QUÉT TIN NHẮN
 # =========================================================
 
 with tab1:
 
-    st.subheader("🔎 Phân tích tin nhắn đáng ngờ")
-
-    st.write(
-        "Dán nội dung tin nhắn bạn muốn kiểm tra vào ô bên dưới."
+    st.header(
+        "🔍 Phân tích tin nhắn đáng ngờ"
     )
 
-    message = st.text_area(
-        "Nội dung tin nhắn",
-        height=220,
+    st.write(
+        "Dán một tin nhắn, email hoặc đoạn hội thoại "
+        "mà bạn muốn kiểm tra."
+    )
+
+
+    user_input = st.text_area(
+        "Nội dung cần phân tích:",
+        height=180,
         max_chars=MAX_ANALYSIS_CHARS,
         placeholder=(
             "Ví dụ:\n"
             "Tài khoản của bạn sắp bị khóa. "
-            "Hãy bấm vào link và nhập mã OTP để xác minh..."
+            "Hãy gửi OTP và chuyển 2 triệu đồng "
+            "trong 5 phút..."
         )
     )
 
-    col1, col2 = st.columns([1, 4])
 
-    with col1:
+    if st.button(
+        "🚀 PHÂN TÍCH",
+        type="primary",
+        use_container_width=True
+    ):
 
-        analyze_button = st.button(
-            "🛡️ Phân tích",
-            use_container_width=True,
-            type="primary"
-        )
-
-    with col2:
-
-        st.caption(
-            f"Giới hạn nội dung: {MAX_ANALYSIS_CHARS:,} ký tự"
-        )
-
-    if analyze_button:
-
-        if not message.strip():
+        if not user_input.strip():
 
             st.warning(
-                "Bạn hãy nhập nội dung tin nhắn trước."
+                "⚠️ Vui lòng nhập nội dung trước."
             )
 
         else:
 
-            allowed, remaining = can_call_api()
+            with st.spinner(
+                "🧠 Đang phân tích..."
+            ):
 
-            if not allowed:
+                result, source = analyze_message(
+                    user_input.strip()
+                )
 
-                st.warning(
-                    f"Bạn thao tác hơi nhanh. "
-                    f"Hãy chờ khoảng {remaining:.1f} giây rồi thử lại."
+
+            st.session_state.analysis_count += 1
+
+
+            # =================================================
+            # SCORE
+            # =================================================
+
+            score = int(
+                result.get(
+                    "risk_score",
+                    0
+                )
+            )
+
+
+            score = max(
+                0,
+                min(
+                    100,
+                    score
+                )
+            )
+
+
+            level = result.get(
+                "risk_level",
+                "Không xác định"
+            )
+
+
+            display_risk_score(
+                score,
+                level
+            )
+
+
+            st.progress(
+                score / 100
+            )
+
+
+            # =================================================
+            # NGUỒN
+            # =================================================
+
+            if source == "gemini":
+
+                st.success(
+                    "🤖 Gemini đã hỗ trợ phân tích nội dung."
+                )
+
+                st.caption(
+                    "🔐 Điểm rủi ro được tính bởi bộ luật "
+                    "của Lá Chắn Số, không lấy điểm Gemini trả về."
                 )
 
             else:
 
-                st.session_state.analysis_count += 1
-
-                with st.spinner(
-                    "Đang phân tích nội dung..."
-                ):
-
-                    result, source = analyze_message(
-                        message
-                    )
-
-                st.session_state.last_analysis = result
-                st.session_state.last_source = source
-
-    if "last_analysis" in st.session_state:
-
-        result = st.session_state.last_analysis
-
-        score = result.get(
-            "risk_score",
-            0
-        )
-
-        level = result.get(
-            "risk_level",
-            "Không xác định"
-        )
-
-        source = st.session_state.get(
-            "last_source",
-            "fallback"
-        )
-
-        st.divider()
-
-        st.subheader("📊 Kết quả")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-
-            st.metric(
-                "Mức điểm rủi ro",
-                f"{score}/100"
-            )
-
-        with col2:
-
-            st.metric(
-                "Mức độ",
-                level
-            )
-
-        st.progress(
-            min(max(score / 100, 0.0), 1.0)
-        )
-
-        if score >= 70:
-
-            st.markdown(
-                """
-                <div class="danger-box">
-                    <b>🚨 Cần đặc biệt cảnh giác</b><br>
-                    Nội dung có nhiều dấu hiệu rủi ro.
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-        elif score >= 45:
-
-            st.markdown(
-                """
-                <div class="warning-box">
-                    <b>⚠️ Có dấu hiệu đáng chú ý</b><br>
-                    Hãy xác minh thông tin trước khi hành động.
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-        elif score >= 25:
-
-            st.markdown(
-                """
-                <div class="info-box">
-                    <b>🔎 Nên kiểm tra thêm</b><br>
-                    Một số yếu tố trong tin nhắn cần được xác minh.
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-        else:
-
-            st.markdown(
-                """
-                <div class="safe-box">
-                    <b>🟢 Chưa phát hiện nhiều dấu hiệu rõ ràng</b><br>
-                    Tuy nhiên vẫn nên kiểm tra nguồn gửi trước khi hành động.
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-        st.write("")
-
-        if source == "gemini":
-
-            st.success(
-                "🤖 Gemini đã hỗ trợ phân tích nội dung."
-            )
-
-        else:
-
-            error = st.session_state.get(
-                "last_gemini_error"
-            )
-
-            status = st.session_state.get(
-                "last_gemini_status"
-            )
-
-            st.warning(
-                "🛡️ Gemini không hoàn thành lần phân tích này. "
-                "Đã sử dụng bộ phân tích dự phòng."
-            )
-
-            if error:
-
-                with st.expander(
-                    "🔧 Xem lý do Gemini không hoạt động"
-                ):
-
-                    st.code(
-                        f"Status: {status}\n\n{error}"
-                    )
-
-                    st.caption(
-                        "Thông tin này dùng để debug. "
-                        "Không ảnh hưởng đến bộ phân tích dự phòng."
-                    )
-
-        st.subheader("🎯 Chiến thuật được phát hiện")
-
-        strategies = result.get(
-            "detected_strategies",
-            []
-        )
-
-        if strategies:
-
-            for item in strategies:
-
-                st.markdown(
-                    f"- {safe_text(item)}"
+                st.warning(
+                    "🛡️ Gemini đang bận. "
+                    "Đã kích hoạt bộ phân tích dự phòng."
                 )
 
-        else:
-
-            st.write(
-                "Chưa phát hiện chiến thuật rõ ràng."
-            )
-
-        st.subheader("🧠 Dấu hiệu thao túng")
-
-        signals = result.get(
-            "manipulation_signals",
-            []
-        )
-
-        if signals:
-
-            for item in signals:
-
-                st.markdown(
-                    f"- {safe_text(item)}"
+                st.caption(
+                    "Điểm rủi ro được tính toán dựa trên bộ quy tắc của ứng dụng."
                 )
 
-        else:
 
-            st.write(
-                "Chưa phát hiện dấu hiệu thao túng rõ ràng."
-            )
+            st.divider()
 
-        st.subheader("🔍 Bằng chứng")
 
-        evidence = result.get(
-            "evidence",
-            []
-        )
+            # =================================================
+            # 3 METRICS
+            # =================================================
 
-        if evidence:
+            col1, col2, col3 = st.columns(3)
 
-            for item in evidence:
 
-                st.markdown(
-                    f"- {safe_text(item)}"
+            with col1:
+
+                st.metric(
+                    "📊 Điểm rủi ro",
+                    f"{score}/100"
                 )
 
-        else:
+
+            with col2:
+
+                st.metric(
+                    "⚠️ Mức độ",
+                    level
+                )
+
+
+            with col3:
+
+                st.metric(
+                    "🎯 Chiến thuật chính",
+                    result.get(
+                        "main_strategy",
+                        "Không xác định"
+                    )
+                )
+
+
+            st.divider()
+
+
+            # =================================================
+            # LEFT / RIGHT
+            # =================================================
+
+            col_left, col_right = st.columns(2)
+
+
+            # -------------------------------------------------
+            # LEFT
+            # -------------------------------------------------
+
+            with col_left:
+
+                st.subheader(
+                    "🧠 Cơ chế thao túng"
+                )
+
+
+                st.write(
+                    result.get(
+                        "psychological_mechanism",
+                        "Không có dữ liệu."
+                    )
+                )
+
+
+                st.subheader(
+                    "🚨 Dấu hiệu phát hiện"
+                )
+
+
+                signals = result.get(
+                    "manipulation_signals",
+                    []
+                )
+
+
+                if signals:
+
+                    for signal in signals:
+
+                        st.markdown(
+                            f"- ⚠️ {signal}"
+                        )
+
+                else:
+
+                    st.write(
+                        "Không phát hiện dấu hiệu rõ ràng."
+                    )
+
+
+            # -------------------------------------------------
+            # RIGHT
+            # -------------------------------------------------
+
+            with col_right:
+
+                st.subheader(
+                    "🔎 Bằng chứng"
+                )
+
+
+                evidence = result.get(
+                    "evidence",
+                    []
+                )
+
+
+                if evidence:
+
+                    for item in evidence:
+
+                        st.info(
+                            str(item)
+                        )
+
+                else:
+
+                    st.write(
+                        "Không có bằng chứng cụ thể."
+                    )
+
+
+                st.subheader(
+                    "🛡️ Nên làm gì?"
+                )
+
+
+                actions = result.get(
+                    "recommended_actions",
+                    []
+                )
+
+
+                if actions:
+
+                    for i, action in enumerate(
+                        actions,
+                        start=1
+                    ):
+
+                        st.write(
+                            f"**{i}.** {action}"
+                        )
+
+                else:
+
+                    st.write(
+                        "Chưa có khuyến nghị."
+                    )
+
+
+            st.divider()
+
+
+            # =================================================
+            # STRATEGIES
+            # =================================================
+
+            st.subheader(
+                "🧩 Các chiến thuật được phát hiện"
+            )
+
+
+            strategies = result.get(
+                "detected_strategies",
+                []
+            )
+
+
+            if strategies:
+
+                for strategy in strategies:
+
+                    st.markdown(
+                        f"🔴 **{strategy}**"
+                    )
+
+            else:
+
+                st.write(
+                    "Không phát hiện chiến thuật rõ ràng."
+                )
+
+
+            st.divider()
+
+
+            # =================================================
+            # REASONING
+            # =================================================
+
+            st.subheader(
+                "📝 Lý do đánh giá"
+            )
+
 
             st.write(
-                "Không có bằng chứng cụ thể được ghi nhận."
+                result.get(
+                    "reasoning",
+                    "Không có dữ liệu."
+                )
             )
 
-        st.subheader("🧠 Cơ chế tâm lý")
 
-        st.write(
-            result.get(
-                "psychological_mechanism",
-                ""
-            )
-        )
+            # =================================================
+            # RULE ENGINE DEBUG / MINH BẠCH
+            # =================================================
 
-        st.subheader("✅ Bạn nên làm gì?")
+            with st.expander(
+                "🔬 Xem dấu hiệu mà chúng tôi đã phát hiện"
+            ):
 
-        actions = result.get(
-            "recommended_actions",
-            []
-        )
+                rule_result = calculate_risk_score(
+                    user_input.strip()
+                )
 
-        for action in actions:
 
-            st.markdown(
-                f"- {safe_text(action)}"
-            )
+                matched = rule_result.get(
+                    "matched",
+                    []
+                )
 
-        st.subheader("💡 Giải thích")
 
-        st.write(
-            result.get(
-                "reasoning",
-                ""
-            )
-        )
+                if matched:
+
+                    st.write(
+                        "**Nhóm tín hiệu:**"
+                    )
+
+                    for item in matched:
+
+                        st.markdown(
+                            f"- {item}"
+                        )
+
+
+                keywords = rule_result.get(
+                    "keywords",
+                    {}
+                )
+
+
+                st.write(
+                    "**Từ khóa cụ thể:**"
+                )
+
+
+                for category, values in keywords.items():
+
+                    if values:
+
+                        st.write(
+                            f"**{category}:** "
+                            + ", ".join(
+                                map(
+                                    str,
+                                    values
+                                )
+                            )
+                        )
+
+
+                money_amounts = (
+                    rule_result[
+                        "keywords"
+                    ].get(
+                        "money_amounts",
+                        []
+                    )
+                )
+
+
+                if money_amounts:
+
+                    st.write(
+                        "**Số tiền nhận diện:** "
+                        + ", ".join(
+                            money_amounts
+                        )
+                    )
 
 
 # =========================================================
@@ -1642,192 +3767,430 @@ with tab1:
 
 with tab2:
 
-    st.subheader("🎮 Thử thách nhận diện lừa đảo")
-
-    st.write(
-        "Hãy đọc tình huống và chọn cách xử lý an toàn nhất."
+    st.header(
+        "🎮 Phòng thực hành phản xạ số"
     )
 
-    if st.session_state.game_question is None:
 
-        if st.button(
-            "🎲 Bắt đầu thử thách",
-            type="primary"
-        ):
+    st.info(
+        "Bạn sẽ gặp các tình huống giả lập. "
+        "Hãy đọc kỹ và chọn cách xử lý an toàn nhất."
+    )
 
-            get_new_scenario()
 
-            st.rerun()
+    total_scenarios = len(
+        FALLBACK_SCENARIOS
+    )
 
-    else:
 
-        scenario = st.session_state.game_question
+    used_count = len(
+        st.session_state.used_scenario_ids
+    )
 
-        st.markdown(
-            f"""
-            <div class="risk-card">
-                <b>Vòng {st.session_state.game_round}</b>
-                <br><br>
-                {scenario["question"]}
-            </div>
-            """,
-            unsafe_allow_html=True
+
+    st.markdown(
+        f"""
+        <div class="game-counter">
+            🎯 Tình huống đã chơi:
+            {used_count}/{total_scenarios}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+    st.progress(
+        used_count / total_scenarios
+    )
+
+
+    # =====================================================
+    # NÚT TẠO TÌNH HUỐNG
+    # =====================================================
+
+    if st.button(
+        "🎲 TẠO TÌNH HUỐNG",
+        use_container_width=True
+    ):
+
+        # =================================================
+        # KHÔNG GỌI GEMINI.
+        #
+        # Đây là điểm thay đổi quan trọng nhất.
+        # =================================================
+
+        get_next_scenario()
+
+        st.rerun()
+
+
+    # =====================================================
+    # HIỂN THỊ GAME
+    # =====================================================
+
+    if st.session_state.game_question:
+
+        game = (
+            st.session_state.game_question
         )
 
-        options = [
-            scenario["answer"],
-            "Làm theo ngay vì người gửi nói rất khẩn cấp.",
-            "Gửi thêm thông tin cá nhân để họ kiểm tra.",
-            "Chuyển tiếp tin nhắn cho nhiều người mà không kiểm tra."
-        ]
 
-        # Không random lại sau mỗi rerun.
-        if "game_options" not in st.session_state:
-            random_options = options.copy()
-            random.shuffle(random_options)
-            st.session_state.game_options = random_options
+        st.divider()
 
-        selected = st.radio(
-            "Bạn sẽ làm gì?",
-            st.session_state.game_options,
-            key=f"game_answer_{st.session_state.game_round}"
+
+        # -------------------------------------------------
+        # ID + CATEGORY
+        # -------------------------------------------------
+
+        st.caption(
+            f"🧩 Tình huống #{game['id']} "
+            f"• Chủ đề: {game['category']}"
         )
 
-        if st.button(
-            "✅ Kiểm tra đáp án",
-            type="primary"
+
+        st.subheader(
+            "📩 Tin nhắn bạn nhận được:"
+        )
+
+
+        st.warning(
+            str(
+                game.get(
+                    "message",
+                    ""
+                )
+            )
+        )
+
+
+        st.subheader(
+            str(
+                game.get(
+                    "question",
+                    "Bạn nên làm gì?"
+                )
+            )
+        )
+
+
+        options = game.get(
+            "options",
+            []
+        )
+
+
+        if (
+            isinstance(
+                options,
+                list
+            )
+            and len(options) == 4
         ):
 
-            if selected == scenario["answer"]:
 
-                st.session_state.game_result = True
+            # -------------------------------------------------
+            # DÙNG KEY THEO GAME ROUND
+            #
+            # Như vậy Streamlit không giữ đáp án cũ
+            # khi chuyển sang tình huống mới.
+            # -------------------------------------------------
 
-            else:
-
-                st.session_state.game_result = False
-
-        if st.session_state.game_result is not None:
-
-            if st.session_state.game_result:
-
-                st.success(
-                    "🎉 Chính xác! Đây là cách xử lý an toàn hơn."
-                )
-
-            else:
-
-                st.error(
-                    "⚠️ Chưa đúng. Hãy chú ý đến các dấu hiệu gây áp lực, "
-                    "yêu cầu thông tin hoặc liên kết đáng ngờ."
-                )
-
-            st.info(
-                scenario["explanation"]
+            answer_key = (
+                f"game_answer_"
+                f"{st.session_state.game_round}"
             )
 
+
+            answer = st.radio(
+                "Chọn cách xử lý:",
+                options,
+                index=None,
+                key=answer_key
+            )
+
+
             if st.button(
-                "➡️ Tình huống tiếp theo"
+                "✅ KIỂM TRA",
+                use_container_width=True
             ):
 
-                st.session_state.pop(
-                    "game_options",
-                    None
-                )
+                if answer is None:
 
-                get_new_scenario()
+                    st.warning(
+                        "⚠️ Hãy chọn một phương án."
+                    )
+
+                else:
+
+                    try:
+
+                        selected_index = (
+                            options.index(
+                                answer
+                            )
+                        )
+
+                        correct_index = int(
+                            game.get(
+                                "correct_index",
+                                0
+                            )
+                        )
+
+                    except (
+                        ValueError,
+                        TypeError
+                    ):
+
+                        selected_index = -1
+
+                        correct_index = 0
+
+
+                    if (
+                        selected_index
+                        == correct_index
+                    ):
+
+                        st.success(
+                            "🎉 Chính xác! "
+                            "Đây là phản ứng an toàn."
+                        )
+
+                    else:
+
+                        st.error(
+                            "⚠️ Chưa phải lựa chọn "
+                            "an toàn nhất."
+                        )
+
+
+                    st.info(
+                        "💡 **Giải thích:** "
+                        + str(
+                            game.get(
+                                "explanation",
+                                ""
+                            )
+                        )
+                    )
+
+
+            st.divider()
+
+
+            # -------------------------------------------------
+            # TÌNH HUỐNG KHÁC
+            # -------------------------------------------------
+
+            if st.button(
+                "➡️ TÌNH HUỐNG KHÁC",
+                use_container_width=True
+            ):
+
+                get_next_scenario()
 
                 st.rerun()
 
 
+        else:
+
+            st.error(
+                "Tình huống không hợp lệ."
+            )
+
+
+    else:
+
+        st.markdown(
+            """
+            ### 👋 Chưa có tình huống
+
+            Nhấn **🎲 TẠO TÌNH HUỐNG** để bắt đầu.
+
+            
+            """
+        )
+
+
+    # =====================================================
+    # RESET VÒNG GAME
+    # =====================================================
+
+    st.divider()
+
+
+    with st.expander(
+        "⚙️ Tùy chọn game"
+    ):
+
+        st.write(
+            f"Chúng tôi hiện có **{total_scenarios} tình huống**."
+        )
+
+
+        if st.button(
+            "🔄 CHƠI LẠI TỪ ĐẦU"
+        ):
+
+            st.session_state.used_scenario_ids = []
+
+            st.session_state.game_question = None
+
+            st.session_state.game_result = None
+
+            st.session_state.game_answer = None
+
+            st.session_state.game_round = 0
+
+            st.rerun()
+
+
 # =========================================================
-# TAB 3 - HƯỚNG DẪN
+# TAB 3 - KIẾN THỨC
 # =========================================================
 
 with tab3:
 
-    st.subheader("ℹ️ Cách sử dụng")
-
-    st.markdown(
-        """
-        ### 🛡️ 1. Dán tin nhắn
-
-        Sao chép nội dung tin nhắn đáng ngờ vào phần
-        **Phân tích tin nhắn**.
-
-        ### 🔎 2. Xem các dấu hiệu
-
-        Hệ thống kiểm tra các nhóm dấu hiệu như:
-
-        - Yêu cầu mật khẩu
-        - Yêu cầu mã OTP
-        - Chuyển tiền
-        - Liên kết đáng ngờ
-        - Tạo cảm giác khẩn cấp
-        - Đe dọa
-        - Mạo danh
-        - Thu thập thông tin cá nhân
-        - Quà tặng / phần thưởng
-        - Yêu cầu giữ bí mật
-        - Thúc đẩy hành động
-
-        ### 🧠 3. Không chỉ dựa vào điểm số
-
-        Điểm số chỉ là tín hiệu hỗ trợ. Một tin nhắn có điểm thấp
-        vẫn cần được kiểm tra nếu nguồn gửi hoặc yêu cầu có điều gì
-        bất thường.
-
-        ### 🚫 4. Không cung cấp thông tin nhạy cảm
-
-        Không chia sẻ mật khẩu, mã OTP hoặc thông tin cá nhân
-        chỉ vì một tin nhắn yêu cầu.
-
-        ### 👨‍👩‍👧 5. Khi không chắc chắn
-
-        Hãy hỏi phụ huynh, giáo viên hoặc một người lớn đáng tin cậy
-        trước khi thực hiện hành động quan trọng.
-        """
+    st.header(
+        "📚 5 nguyên tắc tự vệ số"
     )
+
+
+    principles = [
+
+        (
+            "1️⃣ DỪNG LẠI",
+            "Không hành động ngay khi có một tin nhắn "
+            "cố tạo áp lực."
+        ),
+
+        (
+            "2️⃣ KIỂM TRA",
+            "Xác minh người gửi và thông tin bằng "
+            "một kênh độc lập."
+        ),
+
+        (
+            "3️⃣ KHÔNG CHIA SẺ",
+            "Không cung cấp mật khẩu, mã xác thực "
+            "hoặc thông tin cá nhân nhạy cảm "
+            "cho người lạ."
+        ),
+
+        (
+            "4️⃣ KHÔNG VỘI BẤM LINK",
+            "Đặc biệt cảnh giác với liên kết được gửi "
+            "kèm lời đe dọa, phần thưởng hoặc thời hạn gấp."
+        ),
+
+        (
+            "5️⃣ BÁO NGƯỜI ĐÁNG TIN",
+            "Nếu không chắc chắn, hãy hỏi phụ huynh, "
+            "giáo viên hoặc người lớn đáng tin cậy."
+        )
+    ]
+
+
+    for title, description in principles:
+
+        with st.container(
+            border=True
+        ):
+
+            st.subheader(
+                title
+            )
+
+            st.write(
+                description
+            )
+
 
     st.divider()
 
-    st.subheader("🔧 Trạng thái hệ thống")
 
-    st.write(
-        f"**Model:** `{MODEL}`"
+    st.subheader(
+        "🔐 Những thông tin không nên chia sẻ"
     )
 
-    st.write(
-        f"**Model dự phòng:** `{FALLBACK_MODEL}`"
+
+    sensitive_items = [
+        "Mật khẩu",
+        "OTP / mã xác thực",
+        "PIN",
+        "Thông tin đăng nhập",
+        "Thông tin tài khoản ngân hàng",
+        "CCCD/căn cước khi chưa xác minh nguồn yêu cầu"
+    ]
+
+
+    for item in sensitive_items:
+
+        st.markdown(
+            f"- 🔒 {item}"
+        )
+
+
+    st.divider()
+
+
+    st.subheader(
+        "🚨 Dấu hiệu cần đặc biệt cảnh giác"
     )
 
-    st.write(
-        f"**Số lần phân tích:** "
-        f"`{st.session_state.analysis_count}`"
+
+    warning_items = [
+
+        "Yêu cầu chuyển tiền bất ngờ.",
+
+        "Yêu cầu OTP hoặc mật khẩu.",
+
+        "Hứa phần thưởng rất lớn.",
+
+        "Tạo áp lực phải làm ngay.",
+
+        "Đe dọa khóa tài khoản hoặc phạt.",
+
+        "Gửi link lạ để đăng nhập.",
+
+        "Tự nhận là ngân hàng, công an, giáo viên hoặc người quen.",
+
+        "Yêu cầu giữ bí mật với người lớn đáng tin cậy."
+    ]
+
+
+    for item in warning_items:
+
+        st.markdown(
+            f"- ⚠️ {item}"
+        )
+
+
+    st.divider()
+
+
+    st.caption(
+        "🛡️ Lá Chắn Số THPT — Công cụ giáo dục "
+        "nhận thức và kỹ năng tự vệ số."
     )
 
-    if API_KEY:
 
-        st.success(
-            "GEMINI_API_KEY đã được phát hiện trong Secrets."
-        )
+# =========================================================
+# 19. FOOTER
+# =========================================================
 
-    else:
+st.divider()
 
-        st.error(
-            "Chưa tìm thấy GEMINI_API_KEY trong Secrets."
-        )
 
-    if st.session_state.last_gemini_status:
+st.caption(
+    "🛡️ Lá Chắn Số THPT"
+)
 
-        st.write(
-            f"**Trạng thái Gemini gần nhất:** "
-            f"`{st.session_state.last_gemini_status}`"
-        )
-'''
 
-path = "/mnt/data/app.py"
-with open(path, "w", encoding="utf-8") as f:
-    f.write(code)
+st.caption(
+    f"📊 Đã thực hiện "
+    f"{st.session_state.analysis_count} lượt phân tích "
+    f"trong phiên này."
+)
 
-print(f"Đã tạo file hoàn chỉnh: {path}")
-print(f"Số dòng: {len(code.splitlines())}")
