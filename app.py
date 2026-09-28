@@ -1,4 +1,4 @@
-import streamlit as st
+code = r'''import streamlit as st
 import urllib.request
 import urllib.error
 import json
@@ -20,17 +20,20 @@ st.set_page_config(
 # Gemini 3.8 Flash
 MODEL = "gemini-3.8-flash"
 
+# Model dự phòng nếu model chính gặp lỗi tạm thời
+FALLBACK_MODEL = "gemini-2.5-flash"
+
 # Không gọi API liên tục
 COOLDOWN_SECONDS = 5
 
 # Giới hạn nội dung gửi lên Gemini
 MAX_ANALYSIS_CHARS = 12000
 
-# Timeout ngắn hơn để tránh app bị treo quá lâu
+# Timeout
 GEMINI_TIMEOUT = 25
 
-# Chỉ retry các lỗi tạm thời
-GEMINI_MAX_ATTEMPTS = 2
+# Số lần retry cho lỗi tạm thời
+GEMINI_MAX_ATTEMPTS = 3
 
 
 # =========================================================
@@ -53,7 +56,6 @@ DEFAULT_STATE = {
 
     "game_question": None,
     "game_result": None,
-    "game_answer": None,
 
     "used_scenarios": [],
     "game_round": 0,
@@ -229,18 +231,10 @@ def extract_json(text):
 
     text = text.strip()
 
-    # -----------------------------------------------------
-    # Trường hợp 1: JSON thuần
-    # -----------------------------------------------------
-
     try:
         return json.loads(text)
     except Exception:
         pass
-
-    # -----------------------------------------------------
-    # Trường hợp 2: fenced JSON
-    # -----------------------------------------------------
 
     fenced = re.search(
         r"```(?:json)?\s*(.*?)\s*```",
@@ -256,15 +250,10 @@ def extract_json(text):
         except Exception:
             pass
 
-    # -----------------------------------------------------
-    # Trường hợp 3: tìm object JSON
-    # -----------------------------------------------------
-
     start = text.find("{")
     end = text.rfind("}")
 
     if start != -1 and end > start:
-
         candidate = text[start:end + 1]
 
         try:
@@ -272,15 +261,10 @@ def extract_json(text):
         except Exception:
             pass
 
-    # -----------------------------------------------------
-    # Trường hợp 4: tìm array JSON
-    # -----------------------------------------------------
-
     start = text.find("[")
     end = text.rfind("]")
 
     if start != -1 and end > start:
-
         candidate = text[start:end + 1]
 
         try:
@@ -309,10 +293,6 @@ def calculate_risk_score(message):
     detected = []
     signals = []
 
-    # -----------------------------------------------------
-    # Mật khẩu / tài khoản
-    # -----------------------------------------------------
-
     password_patterns = [
         r"\bmật khẩu\b",
         r"\bpassword\b",
@@ -328,10 +308,6 @@ def calculate_risk_score(message):
         detected.append("Yêu cầu thông tin tài khoản")
         signals.append("Tin nhắn đề cập đến tài khoản hoặc mật khẩu.")
 
-    # -----------------------------------------------------
-    # OTP / mã xác minh
-    # -----------------------------------------------------
-
     otp_patterns = [
         r"\botp\b",
         r"mã xác minh",
@@ -345,10 +321,6 @@ def calculate_risk_score(message):
         score += 25
         detected.append("Thu thập mã xác thực")
         signals.append("Có dấu hiệu yêu cầu hoặc đề cập đến mã OTP/xác minh.")
-
-    # -----------------------------------------------------
-    # Tiền
-    # -----------------------------------------------------
 
     money_patterns = [
         r"\bchuyển khoản\b",
@@ -369,10 +341,6 @@ def calculate_risk_score(message):
         detected.append("Yếu tố tiền bạc")
         signals.append("Tin nhắn có liên quan đến tiền hoặc giao dịch.")
 
-    # -----------------------------------------------------
-    # Link
-    # -----------------------------------------------------
-
     link_patterns = [
         r"https?://",
         r"www\.",
@@ -387,10 +355,6 @@ def calculate_risk_score(message):
         score += 18
         detected.append("Liên kết đáng chú ý")
         signals.append("Tin nhắn có chứa hoặc nhắc đến đường dẫn.")
-
-    # -----------------------------------------------------
-    # Khẩn cấp
-    # -----------------------------------------------------
 
     urgency_patterns = [
         r"\bgấp\b",
@@ -410,10 +374,6 @@ def calculate_risk_score(message):
         detected.append("Tạo cảm giác khẩn cấp")
         signals.append("Người nhận bị thúc ép phải hành động nhanh.")
 
-    # -----------------------------------------------------
-    # Đe dọa
-    # -----------------------------------------------------
-
     threat_patterns = [
         r"\bkhóa tài khoản\b",
         r"\bkhóa\b",
@@ -430,10 +390,6 @@ def calculate_risk_score(message):
         score += 20
         detected.append("Đe dọa / gây áp lực")
         signals.append("Có ngôn ngữ tạo sợ hãi hoặc áp lực.")
-
-    # -----------------------------------------------------
-    # Mạo danh
-    # -----------------------------------------------------
 
     impersonation_patterns = [
         r"\bngân hàng\b",
@@ -454,10 +410,6 @@ def calculate_risk_score(message):
         detected.append("Dấu hiệu mạo danh")
         signals.append("Tin nhắn có thể đang sử dụng danh nghĩa của một tổ chức/người khác.")
 
-    # -----------------------------------------------------
-    # Thông tin cá nhân
-    # -----------------------------------------------------
-
     personal_patterns = [
         r"\bcccd\b",
         r"\bcmnd\b",
@@ -473,10 +425,6 @@ def calculate_risk_score(message):
         score += 17
         detected.append("Thu thập thông tin cá nhân")
         signals.append("Có dấu hiệu yêu cầu thông tin cá nhân hoặc định danh.")
-
-    # -----------------------------------------------------
-    # Quà / thưởng
-    # -----------------------------------------------------
 
     reward_patterns = [
         r"\btrúng thưởng\b",
@@ -494,10 +442,6 @@ def calculate_risk_score(message):
         detected.append("Mồi quà tặng / phần thưởng")
         signals.append("Tin nhắn sử dụng lợi ích hoặc phần thưởng để thu hút.")
 
-    # -----------------------------------------------------
-    # Giữ bí mật
-    # -----------------------------------------------------
-
     secrecy_patterns = [
         r"\bđừng nói\b",
         r"\bkhông được nói\b",
@@ -510,10 +454,6 @@ def calculate_risk_score(message):
         score += 15
         detected.append("Yêu cầu giữ bí mật")
         signals.append("Có dấu hiệu muốn người nhận không trao đổi với người khác.")
-
-    # -----------------------------------------------------
-    # Hành động
-    # -----------------------------------------------------
 
     action_patterns = [
         r"\bclick\b",
@@ -531,10 +471,6 @@ def calculate_risk_score(message):
         score += 10
         detected.append("Thúc đẩy hành động")
         signals.append("Tin nhắn yêu cầu người nhận thực hiện một hành động cụ thể.")
-
-    # -----------------------------------------------------
-    # Combo nguy hiểm
-    # -----------------------------------------------------
 
     if (
         any(re.search(p, text) for p in otp_patterns)
@@ -566,15 +502,7 @@ def calculate_risk_score(message):
     ):
         score += 10
 
-    # -----------------------------------------------------
-    # Giới hạn
-    # -----------------------------------------------------
-
     score = min(100, max(0, score))
-
-    # -----------------------------------------------------
-    # Mức độ
-    # -----------------------------------------------------
 
     if score >= 70:
         level = "Rất cao"
@@ -612,7 +540,6 @@ def fallback_analysis(message, local_result=None):
     signals = local_result.get("manipulation_signals", [])
 
     if score >= 70:
-
         main_strategy = (
             "Tin nhắn có nhiều dấu hiệu gây áp lực, "
             "yêu cầu hành động hoặc thu thập thông tin nhạy cảm."
@@ -624,7 +551,6 @@ def fallback_analysis(message, local_result=None):
         )
 
     elif score >= 45:
-
         main_strategy = (
             "Tin nhắn có một số dấu hiệu đáng chú ý liên quan đến "
             "tài khoản, tiền bạc, liên kết hoặc hành động khẩn cấp."
@@ -636,7 +562,6 @@ def fallback_analysis(message, local_result=None):
         )
 
     elif score >= 25:
-
         main_strategy = (
             "Tin nhắn có một vài dấu hiệu cần kiểm tra thêm."
         )
@@ -647,7 +572,6 @@ def fallback_analysis(message, local_result=None):
         )
 
     else:
-
         main_strategy = (
             "Chưa phát hiện nhiều dấu hiệu rõ ràng từ các quy tắc hiện tại."
         )
@@ -721,15 +645,14 @@ def call_gemini(message):
     """
     Gọi Gemini REST API.
 
-    Trả về:
-        success: bool
-        data: dict | None
-        error: str | None
-        status: int | None
+    Xử lý:
+    - cooldown
+    - lỗi 503/502/500/504 bằng exponential backoff
+    - thử lại model dự phòng nếu model chính gặp lỗi tạm thời
+    - fallback local nếu API không hoạt động
     """
 
     if not API_KEY:
-
         return {
             "success": False,
             "data": None,
@@ -740,7 +663,6 @@ def call_gemini(message):
     allowed, remaining = can_call_api()
 
     if not allowed:
-
         return {
             "success": False,
             "data": None,
@@ -753,17 +675,7 @@ def call_gemini(message):
 
     mark_api_call()
 
-    # Không gửi nội dung quá dài
     message = safe_text(message)[:MAX_ANALYSIS_CHARS]
-
-    url = (
-        f"https://generativelanguage.googleapis.com/"
-        f"v1beta/models/{MODEL}:generateContent"
-    )
-
-    # -----------------------------------------------------
-    # JSON schema đơn giản
-    # -----------------------------------------------------
 
     response_schema = {
         "type": "OBJECT",
@@ -821,7 +733,6 @@ def call_gemini(message):
                 }
             ]
         },
-
         "contents": [
             {
                 "role": "user",
@@ -836,393 +747,327 @@ def call_gemini(message):
                 ]
             }
         ],
-
         "generationConfig": {
             "maxOutputTokens": 1000,
-
-            # Gemini 3.8 không cần temperature
             "responseMimeType": "application/json",
-
             "responseSchema": response_schema
         }
     }
 
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    data = json.dumps(
+        payload,
+        ensure_ascii=False
+    ).encode("utf-8")
 
     headers = {
         "Content-Type": "application/json",
         "x-goog-api-key": API_KEY,
     }
 
-    # -----------------------------------------------------
-    # Retry
-    # -----------------------------------------------------
+    models_to_try = [MODEL, FALLBACK_MODEL]
 
     last_error = None
     last_status = None
 
-    for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
+    for model_index, current_model in enumerate(models_to_try):
 
-        try:
+        url = (
+            "https://generativelanguage.googleapis.com/"
+            f"v1beta/models/{current_model}:generateContent"
+        )
 
-            request = urllib.request.Request(
-                url,
-                data=data,
-                headers=headers,
-                method="POST"
-            )
+        for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
 
-            with urllib.request.urlopen(
-                request,
-                timeout=GEMINI_TIMEOUT
-            ) as response:
+            try:
 
-                status_code = response.getcode()
-
-                raw = response.read().decode(
-                    "utf-8",
-                    errors="replace"
+                request = urllib.request.Request(
+                    url,
+                    data=data,
+                    headers=headers,
+                    method="POST"
                 )
 
-            last_status = status_code
+                with urllib.request.urlopen(
+                    request,
+                    timeout=GEMINI_TIMEOUT
+                ) as response:
 
-            # -------------------------------------------------
-            # HTTP thành công
-            # -------------------------------------------------
+                    status_code = response.getcode()
 
-            if 200 <= status_code < 300:
+                    raw = response.read().decode(
+                        "utf-8",
+                        errors="replace"
+                    )
+
+                last_status = status_code
+
+                if 200 <= status_code < 300:
+
+                    try:
+                        result = json.loads(raw)
+                    except json.JSONDecodeError:
+                        return {
+                            "success": False,
+                            "data": None,
+                            "error": (
+                                f"{current_model} trả về dữ liệu "
+                                "không phải JSON hợp lệ."
+                            ),
+                            "status": status_code,
+                        }
+
+                    candidates = result.get("candidates", [])
+
+                    if not candidates:
+                        return {
+                            "success": False,
+                            "data": None,
+                            "error": (
+                                f"{current_model} không trả về candidate nào."
+                            ),
+                            "status": status_code,
+                        }
+
+                    candidate = candidates[0]
+
+                    finish_reason = candidate.get(
+                        "finishReason",
+                        ""
+                    )
+
+                    if finish_reason in {
+                        "SAFETY",
+                        "BLOCKLIST",
+                        "PROHIBITED_CONTENT",
+                        "SPII"
+                    }:
+                        return {
+                            "success": False,
+                            "data": None,
+                            "error": (
+                                f"{current_model} đã chặn phản hồi "
+                                "vì bộ lọc an toàn."
+                            ),
+                            "status": status_code,
+                        }
+
+                    content = candidate.get("content", {})
+                    parts = content.get("parts", [])
+
+                    text_parts = []
+
+                    for part in parts:
+                        if isinstance(part, dict):
+                            part_text = part.get("text")
+
+                            if part_text:
+                                text_parts.append(part_text)
+
+                    response_text = "\n".join(
+                        text_parts
+                    ).strip()
+
+                    if not response_text:
+                        return {
+                            "success": False,
+                            "data": None,
+                            "error": (
+                                f"{current_model} không trả về nội dung. "
+                                f"finishReason="
+                                f"{finish_reason or 'UNKNOWN'}"
+                            ),
+                            "status": status_code,
+                        }
+
+                    parsed = extract_json(response_text)
+
+                    if parsed is None:
+                        return {
+                            "success": False,
+                            "data": None,
+                            "error": (
+                                f"{current_model} trả về nội dung "
+                                "nhưng không parse được JSON."
+                            ),
+                            "status": status_code,
+                        }
+
+                    return {
+                        "success": True,
+                        "data": parsed,
+                        "error": None,
+                        "status": status_code,
+                    }
+
+            except urllib.error.HTTPError as e:
+
+                status_code = e.code
+                last_status = status_code
 
                 try:
-                    result = json.loads(raw)
-                except json.JSONDecodeError:
+                    error_body = e.read().decode(
+                        "utf-8",
+                        errors="replace"
+                    )
+                except Exception:
+                    error_body = ""
 
+                error_message = ""
+
+                try:
+                    parsed_error = json.loads(error_body)
+
+                    error_message = (
+                        parsed_error
+                        .get("error", {})
+                        .get("message", "")
+                    )
+                except Exception:
+                    pass
+
+                if not error_message:
+                    error_message = error_body[:600]
+
+                if status_code == 400:
                     return {
                         "success": False,
                         "data": None,
                         "error": (
-                            "Gemini trả về dữ liệu không phải JSON hợp lệ."
+                            "HTTP 400 - Request không hợp lệ.\n"
+                            f"{error_message}"
                         ),
-                        "status": status_code,
+                        "status": 400,
                     }
 
-                # ---------------------------------------------
-                # Lấy text
-                # ---------------------------------------------
-
-                candidates = result.get("candidates", [])
-
-                if not candidates:
-
+                if status_code == 401:
                     return {
                         "success": False,
                         "data": None,
                         "error": (
-                            "Gemini không trả về candidate nào."
+                            "HTTP 401 - API key không hợp lệ "
+                            "hoặc không được xác thực."
                         ),
-                        "status": status_code,
+                        "status": 401,
                     }
 
-                candidate = candidates[0]
-
-                finish_reason = candidate.get(
-                    "finishReason",
-                    ""
-                )
-
-                # ---------------------------------------------
-                # Kiểm tra safety
-                # ---------------------------------------------
-
-                if finish_reason in {
-                    "SAFETY",
-                    "BLOCKLIST",
-                    "PROHIBITED_CONTENT",
-                    "SPII"
-                }:
-
+                if status_code == 403:
                     return {
                         "success": False,
                         "data": None,
                         "error": (
-                            "Gemini đã chặn phản hồi vì bộ lọc an toàn."
+                            "HTTP 403 - API key không có quyền "
+                            "gọi API này.\n"
+                            f"{error_message}"
                         ),
-                        "status": status_code,
+                        "status": 403,
                     }
 
-                content = candidate.get("content", {})
-
-                parts = content.get("parts", [])
-
-                text_parts = []
-
-                for part in parts:
-
-                    if isinstance(part, dict):
-
-                        part_text = part.get("text")
-
-                        if part_text:
-                            text_parts.append(part_text)
-
-                response_text = "\n".join(text_parts).strip()
-
-                if not response_text:
-
+                if status_code == 404:
                     return {
                         "success": False,
                         "data": None,
                         "error": (
-                            f"Gemini không trả về nội dung. "
-                            f"finishReason={finish_reason or 'UNKNOWN'}"
+                            "HTTP 404 - Không tìm thấy model/API endpoint.\n"
+                            f"Model: {current_model}\n"
+                            f"{error_message}"
                         ),
-                        "status": status_code,
+                        "status": 404,
                     }
 
-                parsed = extract_json(response_text)
-
-                if parsed is None:
-
+                if status_code == 429:
                     return {
                         "success": False,
                         "data": None,
                         "error": (
-                            "Gemini trả về nội dung nhưng không parse được JSON."
+                            "HTTP 429 - Gemini đang giới hạn "
+                            "tần suất hoặc quota API.\n"
+                            f"{error_message}"
                         ),
-                        "status": status_code,
+                        "status": 429,
                     }
+
+                if status_code in {500, 502, 503, 504}:
+
+                    last_error = (
+                        f"HTTP {status_code} - {current_model} "
+                        "đang gặp lỗi tạm thời.\n"
+                        f"{error_message}"
+                    )
+
+                    if attempt < GEMINI_MAX_ATTEMPTS:
+
+                        delay = (
+                            (2 ** (attempt - 1))
+                            + random.uniform(0.5, 1.5)
+                        )
+
+                        time.sleep(delay)
+                        continue
+
+                    # Model hiện tại đã hết số lần thử.
+                    break
 
                 return {
-                    "success": True,
-                    "data": parsed,
-                    "error": None,
+                    "success": False,
+                    "data": None,
+                    "error": (
+                        f"HTTP {status_code}.\n"
+                        f"{error_message}"
+                    ),
                     "status": status_code,
                 }
 
-        # =====================================================
-        # HTTP ERROR
-        # =====================================================
-
-        except urllib.error.HTTPError as e:
-
-            status_code = e.code
-            last_status = status_code
-
-            try:
-                error_body = e.read().decode(
-                    "utf-8",
-                    errors="replace"
-                )
-            except Exception:
-                error_body = ""
-
-            # Parse Google error
-            error_message = ""
-
-            try:
-
-                parsed_error = json.loads(error_body)
-
-                error_message = (
-                    parsed_error
-                    .get("error", {})
-                    .get("message", "")
-                )
-
-            except Exception:
-                pass
-
-            if not error_message:
-                error_message = error_body[:600]
-
-            # -------------------------------------------------
-            # 400
-            # -------------------------------------------------
-
-            if status_code == 400:
-
-                return {
-                    "success": False,
-                    "data": None,
-                    "error": (
-                        f"HTTP 400 - Request không hợp lệ.\n"
-                        f"{error_message}"
-                    ),
-                    "status": 400,
-                }
-
-            # -------------------------------------------------
-            # 401
-            # -------------------------------------------------
-
-            if status_code == 401:
-
-                return {
-                    "success": False,
-                    "data": None,
-                    "error": (
-                        "HTTP 401 - API key không hợp lệ "
-                        "hoặc không được xác thực."
-                    ),
-                    "status": 401,
-                }
-
-            # -------------------------------------------------
-            # 403
-            # -------------------------------------------------
-
-            if status_code == 403:
-
-                return {
-                    "success": False,
-                    "data": None,
-                    "error": (
-                        f"HTTP 403 - API key không có quyền "
-                        f"gọi API này.\n{error_message}"
-                    ),
-                    "status": 403,
-                }
-
-            # -------------------------------------------------
-            # 404
-            # -------------------------------------------------
-
-            if status_code == 404:
-
-                return {
-                    "success": False,
-                    "data": None,
-                    "error": (
-                        f"HTTP 404 - Không tìm thấy model/API endpoint.\n"
-                        f"Model: {MODEL}\n"
-                        f"{error_message}"
-                    ),
-                    "status": 404,
-                }
-
-            # -------------------------------------------------
-            # 429
-            # -------------------------------------------------
-
-            if status_code == 429:
-
-                return {
-                    "success": False,
-                    "data": None,
-                    "error": (
-                        "HTTP 429 - Gemini đang giới hạn "
-                        "tần suất hoặc quota API.\n"
-                        f"{error_message}"
-                    ),
-                    "status": 429,
-                }
-
-            # -------------------------------------------------
-            # 500 / 502 / 503 / 504
-            # -------------------------------------------------
-
-            if status_code in {500, 502, 503, 504}:
+            except urllib.error.URLError as e:
 
                 last_error = (
-                    f"HTTP {status_code} - Máy chủ Gemini "
-                    f"đang gặp lỗi tạm thời.\n"
-                    f"{error_message}"
+                    f"Không kết nối được tới {current_model}.\n"
+                    f"Chi tiết: {e}"
                 )
 
                 if attempt < GEMINI_MAX_ATTEMPTS:
-
-                    # exponential backoff nhẹ
-                    delay = (2 ** attempt) + random.uniform(
-                        0.2,
-                        0.8
+                    time.sleep(
+                        1 + random.uniform(0.2, 0.8)
                     )
-
-                    time.sleep(delay)
-
                     continue
+
+                break
+
+            except TimeoutError:
+
+                last_error = (
+                    f"{current_model} không phản hồi trong "
+                    f"{GEMINI_TIMEOUT} giây."
+                )
+
+                if attempt < GEMINI_MAX_ATTEMPTS:
+                    time.sleep(
+                        1 + random.uniform(0.2, 0.8)
+                    )
+                    continue
+
+                break
+
+            except Exception as e:
 
                 return {
                     "success": False,
                     "data": None,
-                    "error": last_error,
-                    "status": status_code,
+                    "error": (
+                        f"Lỗi không xác định khi gọi "
+                        f"{current_model}: {e}"
+                    ),
+                    "status": "UNKNOWN",
                 }
 
-            # -------------------------------------------------
-            # HTTP khác
-            # -------------------------------------------------
+        # Chỉ chuyển sang model dự phòng nếu model chính
+        # gặp lỗi tạm thời 500/502/503/504.
+        if (
+            model_index == 0
+            and last_status in {500, 502, 503, 504}
+        ):
+            continue
 
-            return {
-                "success": False,
-                "data": None,
-                "error": (
-                    f"HTTP {status_code}.\n"
-                    f"{error_message}"
-                ),
-                "status": status_code,
-            }
-
-        # =====================================================
-        # URL ERROR
-        # =====================================================
-
-        except urllib.error.URLError as e:
-
-            last_error = (
-                "Không kết nối được tới Gemini API.\n"
-                f"Chi tiết: {e}"
-            )
-
-            if attempt < GEMINI_MAX_ATTEMPTS:
-
-                time.sleep(1)
-
-                continue
-
-            return {
-                "success": False,
-                "data": None,
-                "error": last_error,
-                "status": "NETWORK",
-            }
-
-        # =====================================================
-        # TIMEOUT
-        # =====================================================
-
-        except TimeoutError:
-
-            last_error = (
-                f"Gemini không phản hồi trong "
-                f"{GEMINI_TIMEOUT} giây."
-            )
-
-            if attempt < GEMINI_MAX_ATTEMPTS:
-
-                time.sleep(1)
-
-                continue
-
-            return {
-                "success": False,
-                "data": None,
-                "error": last_error,
-                "status": "TIMEOUT",
-            }
-
-        # =====================================================
-        # LỖI KHÁC
-        # =====================================================
-
-        except Exception as e:
-
-            return {
-                "success": False,
-                "data": None,
-                "error": (
-                    f"Lỗi không xác định khi gọi Gemini: {e}"
-                ),
-                "status": "UNKNOWN",
-            }
+        break
 
     return {
         "success": False,
@@ -1238,20 +1083,12 @@ def call_gemini(message):
 
 def analyze_message(message):
 
-    # -----------------------------------------------------
-    # Rule engine chạy trước
-    # -----------------------------------------------------
-
     local_result = calculate_risk_score(message)
 
     fallback = fallback_analysis(
         message,
         local_result
     )
-
-    # -----------------------------------------------------
-    # Không có API key
-    # -----------------------------------------------------
 
     if not API_KEY:
 
@@ -1262,26 +1099,14 @@ def analyze_message(message):
 
         return fallback, "fallback"
 
-    # -----------------------------------------------------
-    # Gọi Gemini
-    # -----------------------------------------------------
-
     result = call_gemini(message)
 
     st.session_state.last_gemini_status = result.get("status")
     st.session_state.last_gemini_error = result.get("error")
 
-    # -----------------------------------------------------
-    # Gemini thành công
-    # -----------------------------------------------------
-
     if result.get("success"):
 
         ai_data = result.get("data") or {}
-
-        # -------------------------------------------------
-        # Lấy từng field an toàn
-        # -------------------------------------------------
 
         main_strategy = safe_text(
             ai_data.get("main_strategy")
@@ -1309,10 +1134,6 @@ def analyze_message(message):
             ai_data.get("reasoning")
         )
 
-        # -------------------------------------------------
-        # Kiểm tra kiểu dữ liệu
-        # -------------------------------------------------
-
         if not isinstance(detected_strategies, list):
             detected_strategies = []
 
@@ -1324,10 +1145,6 @@ def analyze_message(message):
 
         if not isinstance(recommended_actions, list):
             recommended_actions = []
-
-        # -------------------------------------------------
-        # Merge với fallback nếu Gemini thiếu dữ liệu
-        # -------------------------------------------------
 
         if not main_strategy:
             main_strategy = fallback["main_strategy"]
@@ -1354,37 +1171,19 @@ def analyze_message(message):
         if not reasoning:
             reasoning = fallback["reasoning"]
 
-        # -------------------------------------------------
-        # QUAN TRỌNG:
-        # Điểm rủi ro lấy từ local engine
-        # -------------------------------------------------
-
         final_result = {
             "risk_score": local_result["risk_score"],
             "risk_level": local_result["risk_level"],
-
             "main_strategy": main_strategy,
-
             "detected_strategies": detected_strategies,
-
             "manipulation_signals": manipulation_signals,
-
             "evidence": evidence,
-
-            "psychological_mechanism": (
-                psychological_mechanism
-            ),
-
+            "psychological_mechanism": psychological_mechanism,
             "recommended_actions": recommended_actions,
-
             "reasoning": reasoning,
         }
 
         return final_result, "gemini"
-
-    # -----------------------------------------------------
-    # Gemini lỗi -> fallback
-    # -----------------------------------------------------
 
     return fallback, "fallback"
 
@@ -1520,8 +1319,10 @@ def get_new_scenario():
 
     st.session_state.game_question = scenario
     st.session_state.game_result = None
-    st.session_state.game_answer = None
 
+    # Không gán st.session_state.game_answer ở đây.
+    # Radio widget sẽ dùng key riêng theo từng vòng,
+    # tránh StreamlitWidgetAlreadyInstantiatedError.
     st.session_state.game_round += 1
 
 
@@ -1611,11 +1412,6 @@ with tab1:
                 st.session_state.last_analysis = result
                 st.session_state.last_source = source
 
-
-    # -----------------------------------------------------
-    # HIỂN THỊ KẾT QUẢ
-    # -----------------------------------------------------
-
     if "last_analysis" in st.session_state:
 
         result = st.session_state.last_analysis
@@ -1655,17 +1451,9 @@ with tab1:
                 level
             )
 
-        # -------------------------------------------------
-        # Thanh progress
-        # -------------------------------------------------
-
         st.progress(
             min(max(score / 100, 0.0), 1.0)
         )
-
-        # -------------------------------------------------
-        # Màu cảnh báo
-        # -------------------------------------------------
 
         if score >= 70:
 
@@ -1717,10 +1505,6 @@ with tab1:
 
         st.write("")
 
-        # -------------------------------------------------
-        # Nguồn phân tích
-        # -------------------------------------------------
-
         if source == "gemini":
 
             st.success(
@@ -1742,7 +1526,6 @@ with tab1:
                 "Đã sử dụng bộ phân tích dự phòng."
             )
 
-            # Hiển thị lỗi thật
             if error:
 
                 with st.expander(
@@ -1757,10 +1540,6 @@ with tab1:
                         "Thông tin này dùng để debug. "
                         "Không ảnh hưởng đến bộ phân tích dự phòng."
                     )
-
-        # -------------------------------------------------
-        # Chiến thuật
-        # -------------------------------------------------
 
         st.subheader("🎯 Chiến thuật được phát hiện")
 
@@ -1783,10 +1562,6 @@ with tab1:
                 "Chưa phát hiện chiến thuật rõ ràng."
             )
 
-        # -------------------------------------------------
-        # Dấu hiệu thao túng
-        # -------------------------------------------------
-
         st.subheader("🧠 Dấu hiệu thao túng")
 
         signals = result.get(
@@ -1807,10 +1582,6 @@ with tab1:
             st.write(
                 "Chưa phát hiện dấu hiệu thao túng rõ ràng."
             )
-
-        # -------------------------------------------------
-        # Bằng chứng
-        # -------------------------------------------------
 
         st.subheader("🔍 Bằng chứng")
 
@@ -1833,10 +1604,6 @@ with tab1:
                 "Không có bằng chứng cụ thể được ghi nhận."
             )
 
-        # -------------------------------------------------
-        # Cơ chế tâm lý
-        # -------------------------------------------------
-
         st.subheader("🧠 Cơ chế tâm lý")
 
         st.write(
@@ -1845,10 +1612,6 @@ with tab1:
                 ""
             )
         )
-
-        # -------------------------------------------------
-        # Hành động đề xuất
-        # -------------------------------------------------
 
         st.subheader("✅ Bạn nên làm gì?")
 
@@ -1862,10 +1625,6 @@ with tab1:
             st.markdown(
                 f"- {safe_text(action)}"
             )
-
-        # -------------------------------------------------
-        # Lý do
-        # -------------------------------------------------
 
         st.subheader("💡 Giải thích")
 
@@ -1922,9 +1681,7 @@ with tab2:
             "Chuyển tiếp tin nhắn cho nhiều người mà không kiểm tra."
         ]
 
-        random_options = options.copy()
-
-        # Không random để tránh thay đổi lựa chọn sau rerun
+        # Không random lại sau mỗi rerun.
         if "game_options" not in st.session_state:
             random_options = options.copy()
             random.shuffle(random_options)
@@ -1933,7 +1690,7 @@ with tab2:
         selected = st.radio(
             "Bạn sẽ làm gì?",
             st.session_state.game_options,
-            key="game_answer"
+            key=f"game_answer_{st.session_state.game_round}"
         )
 
         if st.button(
@@ -2040,6 +1797,10 @@ with tab3:
     )
 
     st.write(
+        f"**Model dự phòng:** `{FALLBACK_MODEL}`"
+    )
+
+    st.write(
         f"**Số lần phân tích:** "
         f"`{st.session_state.analysis_count}`"
     )
@@ -2062,3 +1823,11 @@ with tab3:
             f"**Trạng thái Gemini gần nhất:** "
             f"`{st.session_state.last_gemini_status}`"
         )
+'''
+
+path = "/mnt/data/app.py"
+with open(path, "w", encoding="utf-8") as f:
+    f.write(code)
+
+print(f"Đã tạo file hoàn chỉnh: {path}")
+print(f"Số dòng: {len(code.splitlines())}")
